@@ -16,7 +16,6 @@
 <div id="toast" class="toast"></div>
 <div id="loading-bar" class="loading-bar" style="display:none"></div>
 
-
 <!-- MANUAL ENTRY MODAL -->
 <div class="modal-overlay" id="manual-modal">
   <div class="modal">
@@ -24,28 +23,56 @@
       <div class="modal-title">Lançamento Manual</div>
       <span class="modal-close" onclick="closeManual()">×</span>
     </div>
-    <div class="manual-field">
-      <label>Data</label>
-      <input type="date" id="manual-date">
-    </div>
-    <div class="manual-field">
-      <label>Descrição</label>
-      <input type="text" id="manual-desc" placeholder="Ex: Seguro saúde Jan">
-    </div>
-    <div class="manual-field">
-      <label>Valor (R$)</label>
-      <input type="number" id="manual-val" placeholder="0,00" step="0.01">
-    </div>
-    <div class="manual-field">
-      <label>Categoria</label>
-      <select id="manual-sub"></select>
-    </div>
-    <div class="manual-field">
-      <label>Observação (opcional)</label>
-      <input type="text" id="manual-obs" placeholder="Ex: Ref. Jan 2026">
-    </div>
+    <div class="manual-field"><label>Data</label><input type="date" id="manual-date"></div>
+    <div class="manual-field"><label>Descrição</label><input type="text" id="manual-desc" placeholder="Ex: Seguro saúde Jan"></div>
+    <div class="manual-field"><label>Valor (R$)</label><input type="number" id="manual-val" placeholder="0,00" step="0.01"></div>
+    <div class="manual-field"><label>Categoria</label><select id="manual-sub"></select></div>
+    <div class="manual-field"><label>Observação (opcional)</label><input type="text" id="manual-obs" placeholder="Ex: Ref. Jan 2026"></div>
     <button class="btn" style="margin-top:8px" onclick="saveManual()">Salvar Lançamento</button>
     <button class="btn btn-ghost" onclick="closeManual()">Cancelar</button>
+  </div>
+</div>
+
+<!-- EDIT TX MODAL -->
+<div class="modal-overlay" id="edittx-modal">
+  <div class="modal">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">
+      <div class="modal-title">Editar Lançamento</div>
+      <span class="modal-close" onclick="closeEditTx()">×</span>
+    </div>
+    <input type="hidden" id="edittx-id">
+    <div style="background:var(--s2);border-radius:10px;padding:12px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:600;color:var(--text)" id="edittx-desc"></div>
+      <div style="display:flex;gap:16px;margin-top:6px">
+        <div style="font-size:11px;color:var(--muted)" id="edittx-date"></div>
+        <div style="font-size:11px;color:var(--text);font-feature-settings:'tnum'" id="edittx-val"></div>
+      </div>
+    </div>
+    <div class="manual-field"><label>Subcategoria</label><select id="edittx-sub" onchange="onEditSubChange()"></select></div>
+    <div class="manual-field"><label>Tipo</label>
+      <select id="edittx-cat"><option value="Fixa">Fixa</option><option value="Variáveis">Variável</option></select>
+    </div>
+    <button class="btn" style="margin-top:8px" onclick="saveEditTx()">Salvar</button>
+    <button class="btn btn-ghost" onclick="closeEditTx()">Cancelar</button>
+  </div>
+</div>
+
+<!-- THRESHOLD MODAL -->
+<div class="modal-overlay" id="review-threshold-modal">
+  <div class="modal">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div class="modal-title">Limite de Revisão</div>
+      <span class="modal-close" onclick="closeThresholdModal()">×</span>
+    </div>
+    <div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">
+      Só lançamentos <b>acima deste valor</b> entram na fila de revisão. Os demais são categorizados automaticamente.
+    </div>
+    <div class="manual-field">
+      <label>Valor mínimo (R$)</label>
+      <input type="number" id="review-threshold-input" placeholder="1000" step="100">
+    </div>
+    <button class="btn" style="margin-top:8px" onclick="setReviewThreshold()">Salvar</button>
+    <button class="btn btn-ghost" onclick="closeThresholdModal()">Cancelar</button>
   </div>
 </div>
 
@@ -64,7 +91,34 @@
   </div>
 </div>
 
-<div id="app">
+<!-- PIN SCREEN -->
+<div id="pin-screen">
+  <div class="pin-wrap">
+    <div class="pin-logo">Pedrozo</div>
+    <div class="pin-sub">Gestão Financeira · 2026</div>
+    <div class="pin-dots" id="pin-dots">
+      <div class="pin-dot" id="pd0"></div><div class="pin-dot" id="pd1"></div>
+      <div class="pin-dot" id="pd2"></div><div class="pin-dot" id="pd3"></div>
+    </div>
+    <div id="pin-error" class="pin-error"></div>
+    <div class="pin-grid">
+      <button class="pin-key" onclick="pinKey('1')">1</button>
+      <button class="pin-key" onclick="pinKey('2')">2</button>
+      <button class="pin-key" onclick="pinKey('3')">3</button>
+      <button class="pin-key" onclick="pinKey('4')">4</button>
+      <button class="pin-key" onclick="pinKey('5')">5</button>
+      <button class="pin-key" onclick="pinKey('6')">6</button>
+      <button class="pin-key" onclick="pinKey('7')">7</button>
+      <button class="pin-key" onclick="pinKey('8')">8</button>
+      <button class="pin-key" onclick="pinKey('9')">9</button>
+      <div></div>
+      <button class="pin-key" onclick="pinKey('0')">0</button>
+      <button class="pin-key pin-del" onclick="pinDel()">⌫</button>
+    </div>
+  </div>
+</div>
+
+<div id="app" style="display:none">
   <div class="statusbar"></div>
 
   <!-- HEADER -->
@@ -74,7 +128,6 @@
       <div class="header-sub">Gestão Financeira · 2026</div>
     </div>
     <div class="header-right">
-      <div class="header-month">2026</div>
       <button class="btn-add" onclick="openManual()">+</button>
       <div id="sync-badge" class="sync-badge local">○ Local</div>
     </div>
@@ -82,24 +135,25 @@
 
   <div class="scroll-area">
 
-    <!-- HOME -->
+    <!-- GERAL -->
     <div id="screen-home" class="screen active">
-
-      <!-- Hero numbers -->
       <div class="home-hero" id="home-hero"></div>
-
-      <!-- Month selector -->
-      <div class="section-label" style="margin-top:4px">Mês</div>
+      <div class="section-label" style="margin-top:4px">Composição Acumulada</div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-body"><div id="home-pizza"></div></div>
+      </div>
+      <div class="section-label">Evolução — Total vs Orçado</div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-body" style="padding-top:16px" id="home-evolucao"></div>
+      </div>
+      <div class="section-label">Mês</div>
       <div class="month-pills" id="home-month-pills"></div>
       <div id="home-month-summary"></div>
-
-      <!-- Alerts (compact) -->
       <div id="home-alerts"></div>
-
       <div style="height:8px"></div>
     </div>
 
-    <!-- DESPESAS -->
+    <!-- MENSAL -->
     <div id="screen-despesas" class="screen">
       <div class="month-pills" id="month-pills"></div>
       <div class="card" style="margin-bottom:12px">
@@ -110,26 +164,41 @@
         <div class="card-body">
           <div style="display:flex;gap:24px">
             <div><div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Fixas</div>
-              <div id="desp-kpi-fixa" style="font-size:12px;color:var(--blue)"></div></div>
+              <div id="desp-kpi-fixa" style="font-size:12px;color:var(--blue);cursor:pointer" onclick="openDetailCat('fixa')"></div></div>
             <div><div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Variáveis</div>
-              <div id="desp-kpi-var" style="font-size:12px;color:var(--gold)"></div></div>
+              <div id="desp-kpi-var" style="font-size:12px;color:var(--gold);cursor:pointer" onclick="openDetailCat('variavel')"></div></div>
           </div>
         </div>
       </div>
+      <!-- Pizza 80% -->
       <div class="card" style="margin-bottom:12px">
-        <div class="card-header"><div class="card-title">Composição</div></div>
+        <div class="card-header"><div class="card-title">Composição — 80% das despesas</div></div>
         <div class="card-body"><div class="donut-row" id="desp-donut"></div></div>
       </div>
-      <div class="card">
-        <div class="card-header"><div class="card-title">Por Categoria</div><div style="font-size:10px;color:var(--muted)">Toque para detalhar</div></div>
+      <!-- Top 10 categorias -->
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header"><div class="card-title">Top 10 Categorias</div><div style="font-size:10px;color:var(--muted)">Toque para detalhar</div></div>
         <div class="card-body" id="desp-table"></div>
+      </div>
+      <!-- Top 10 lançamentos -->
+      <div class="card">
+        <div class="card-header"><div class="card-title">Top 10 Lançamentos</div></div>
+        <div class="card-body" id="desp-top10-txs"></div>
       </div>
       <div style="height:8px"></div>
     </div>
 
-    <!-- COMPARATIVO -->
+    <!-- ORÇADO x REALIZADO -->
     <div id="screen-comparativo" class="screen">
-      <div class="section-label">Evolução Mensal 2026</div>
+      <div class="section-label">Orçado × Realizado</div>
+      <div style="display:flex;gap:8px;padding:0 16px 10px">
+        <button id="cmp-toggle-mensal" class="pill active" onclick="setCmpView('mensal')">Por mês</button>
+        <button id="cmp-toggle-anual"  class="pill"        onclick="setCmpView('anual')">Resumo anual</button>
+      </div>
+      <div class="card" style="overflow:hidden;margin-bottom:12px">
+        <div id="cmp-rows"></div>
+      </div>
+      <div class="section-label">Evolução Mensal</div>
       <div class="card" style="margin-bottom:12px">
         <div class="card-body" style="padding-top:16px" id="cmp-barchart"></div>
       </div>
@@ -137,57 +206,56 @@
       <div class="card" style="margin-bottom:12px">
         <div class="card-body"><div id="cmp-donut"></div></div>
       </div>
-      <div class="section-label">Orçado vs Realizado</div>
-      <div style="display:flex;gap:8px;padding:0 16px 10px">
-        <button id="cmp-toggle-mensal" class="pill active" onclick="setCmpView('mensal')">Por mês</button>
-        <button id="cmp-toggle-anual"  class="pill"        onclick="setCmpView('anual')">Resumo anual</button>
-      </div>
-      <div class="card" style="overflow:hidden">
-        <div id="cmp-rows"></div>
-      </div>
       <div style="height:8px"></div>
     </div>
 
     <!-- PATRIMÔNIO -->
     <div id="screen-patrimonio" class="screen">
       <div class="pat-total-block">
-        <div class="pat-big">R$ 27,4M</div>
-        <div class="pat-sub">Posição Patrimonial · Fevereiro 2026</div>
+        <div class="pat-big" id="pat-total-val">—</div>
+        <div class="pat-sub">Posição Patrimonial · 2026</div>
       </div>
       <div class="card" style="margin-bottom:12px">
         <div class="card-header"><div class="card-title">Alocação</div></div>
         <div class="card-body"><div id="pat-donut"></div></div>
       </div>
       <div class="card">
-        <div class="pat-group-title" style="border-top:none;margin-top:0">Ativos Líquidos · R$ 9.479.902</div>
+        <div class="pat-group-title" style="border-top:none;margin-top:0">Ativos Líquidos</div>
         <div id="pat-items-liq"></div>
-        <div class="pat-group-title">Ativos Imobilizados · R$ 17.900.000</div>
+        <div class="pat-group-title">Ativos Imobilizados</div>
         <div id="pat-items-imob"></div>
       </div>
       <div style="height:8px"></div>
     </div>
 
-    <!-- REVISAR -->
+    <!-- REVISÃO -->
     <div id="screen-revisar" class="screen">
       <div class="section-label">Revisar Lançamentos</div>
-
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:0 16px 10px">
+        <div style="font-size:12px;color:var(--muted)">
+          Revisando lançamentos acima de <b id="review-threshold-val">R$ 1.000</b>
+        </div>
+        <button onclick="openThresholdModal()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:4px 8px">Alterar</button>
+      </div>
+      <div id="review-skipped" style="margin:0 16px 10px;font-size:11px;color:var(--muted);line-height:1.4"></div>
       <div id="review-card-wrap">
         <div style="padding:0 16px 8px;display:flex;align-items:center;gap:12px">
           <div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
-            <div id="review-prog-fill" style="height:100%;background:var(--gold);border-radius:2px;transition:width .3s"></div>
+            <div id="review-prog-fill" style="height:100%;background:var(--blue);border-radius:2px;transition:width .3s"></div>
           </div>
           <div id="review-progress" style="font-size:11px;color:var(--muted);white-space:nowrap"></div>
         </div>
-
         <div class="review-card" id="review-card"></div>
-
         <div style="padding:0 16px 8px">
           <div class="select-row">
-            <div class="select-label">Corrigir categoria para</div>
-            <select id="review-select"></select>
+            <div class="select-label">Subcategoria</div>
+            <select id="review-select" onchange="onReviewSubChange()"></select>
+          </div>
+          <div class="select-row" style="margin-top:8px">
+            <div class="select-label">Tipo</div>
+            <select id="review-cat"><option value="Fixa">Fixa</option><option value="Variáveis">Variável</option></select>
           </div>
         </div>
-
         <div style="display:flex;gap:10px;padding:0 16px 8px">
           <button class="btn btn-ghost" style="flex:1;margin:0;padding:12px" onclick="rejectCard()">✎ Corrigir</button>
           <button class="btn" style="flex:2;margin:0;padding:12px;background:var(--green);border:none" onclick="approveCard()">✓ Aprovado</button>
@@ -196,10 +264,9 @@
           <span onclick="skipCard()" style="font-size:11px;color:var(--muted);cursor:pointer">Pular →</span>
         </div>
         <div style="text-align:center;padding:0 16px 12px;font-size:11px;color:var(--muted)">
-          Deslize para direita ✓ aprovado · para esquerda ✎ corrigir
+          Deslize → aprovado · ← corrigir
         </div>
       </div>
-
       <div id="review-done" style="display:none;flex-direction:column;align-items:center;padding:48px 24px;text-align:center">
         <div style="font-size:48px;margin-bottom:16px">✓</div>
         <div style="font-size:18px;font-family:'Cormorant Garamond',serif;color:var(--text);margin-bottom:8px">Tudo revisado!</div>
@@ -215,7 +282,7 @@
       <div class="import-zone" id="drop-zone">
         <div class="import-icon">📂</div>
         <div class="import-title">Arraste ou toque para importar</div>
-        <div class="import-sub">Aceita: <b>Itaú CSV</b> · <b>Unicred CSV/XLS</b> · <b>Fatura CSV</b></div>
+        <div class="import-sub">Aceita: <b>Itaú CSV</b> · <b>Unicred CSV</b> · <b>Fatura CSV</b></div>
       </div>
       <input type="file" id="file-input" accept=".csv,.xls,.xlsx" multiple>
       <div style="padding:0 16px 8px;font-size:12px;color:var(--muted)" id="import-count"></div>
@@ -227,23 +294,23 @@
 
   </div><!-- scroll-area -->
 
-  <!-- BOTTOM NAV -->
+  <!-- BOTTOM NAV — 6 itens -->
   <div class="bottom-nav">
     <div class="nav-item active" id="nav-home" onclick="showScreen('home')">
-      <div class="nav-icon">◈</div><div>Início</div>
+      <div class="nav-icon">◈</div><div>Geral</div>
     </div>
     <div class="nav-item" id="nav-despesas" onclick="showScreen('despesas')">
-      <div class="nav-icon">◎</div><div>Despesas</div>
+      <div class="nav-icon">◎</div><div>Mensal</div>
     </div>
     <div class="nav-item" id="nav-comparativo" onclick="showScreen('comparativo')">
-      <div class="nav-icon">⇄</div><div>Comparar</div>
+      <div class="nav-icon">⇄</div><div>Orçado</div>
     </div>
     <div class="nav-item" id="nav-patrimonio" onclick="showScreen('patrimonio')">
       <div class="nav-icon">◇</div><div>Patrimônio</div>
     </div>
     <div class="nav-item" id="nav-revisar" onclick="showScreen('revisar')" style="position:relative">
-      <div class="nav-icon">✓</div><div>Revisar</div>
-      <div id="review-badge" style="display:none;position:absolute;top:6px;right:16px;width:16px;height:16px;background:#D63E50;border-radius:50%;font-size:9px;color:#fff;align-items:center;justify-content:center;font-weight:700"></div>
+      <div class="nav-icon">✓</div><div>Revisão</div>
+      <div id="review-badge" style="display:none;position:absolute;top:6px;right:12px;width:16px;height:16px;background:#D63E50;border-radius:50%;font-size:9px;color:#fff;align-items:center;justify-content:center;font-weight:700"></div>
     </div>
     <div class="nav-item" id="nav-import" onclick="showScreen('import')">
       <div class="nav-icon">↑</div><div>Importar</div>

@@ -107,6 +107,11 @@ const cache = {
   load() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)||'[]'); } catch { return []; } },
   save(t) { localStorage.setItem(CACHE_KEY,JSON.stringify(t)); },
 };
+const THRESHOLD_KEY = 'pedrozo_review_threshold';
+const threshold = {
+  get() { return parseFloat(localStorage.getItem(THRESHOLD_KEY)||'1000'); },
+  set(v) { localStorage.setItem(THRESHOLD_KEY, v); },
+};
 const reviewed = {
   load() { try { return JSON.parse(localStorage.getItem(REVIEW_KEY)||'{}'); } catch { return {}; } },
   save(r) { localStorage.setItem(REVIEW_KEY,JSON.stringify(r)); },
@@ -143,9 +148,26 @@ async function loadData(silent=false) {
   refreshAll();
 }
 
+function detectDuplicates(newTxs, existing) {
+  const keys = new Set(existing.map(t=>t.id));
+  const fresh=[], dupes=[], exact=[];
+  newTxs.forEach(t=>{
+    if (keys.has(t.id)) { exact.push(t); return; }
+    // Fuzzy: same val + date within 3 days
+    const fuzzy = existing.find(e=>{
+      if (Math.abs(parseFloat(e.val)-parseFloat(t.val))>0.01) return false;
+      const d1=new Date(e.date), d2=new Date(t.date);
+      return Math.abs(d1-d2) <= 3*86400000;
+    });
+    if (fuzzy) dupes.push({tx:t, similar:fuzzy});
+    else fresh.push(t);
+  });
+  return {fresh, dupes, exact};
+}
+
 async function syncTxs(newTxs) {
-  const all = cache.load(); const keys = new Set(all.map(t=>t.id));
-  const fresh = newTxs.filter(t=>!keys.has(t.id));
+  const all = cache.load();
+  const {fresh} = detectDuplicates(newTxs, all);
   cache.save([...all,...fresh]); STATE.txs = cache.load();
   if (isConfigured() && fresh.length>0) {
     try { const r = await sheetsPost({action:'addTxs',txs:fresh}); return r.added; }
@@ -249,24 +271,40 @@ function renderHome() {
   const rev=reviewed.load(), pending=txs.filter(t=>!rev[t.id]).length;
   const months=txs.reduce((s,t)=>{ if(t.date)s.add(t.date.slice(0,7)); return s; },new Set()).size;
 
-  // Hero block — big clean numbers
+  // Hero block — big numbers + % orçado
+  const budgetMensal = Object.values(BUDGET).reduce((a,b)=>a+b,0);
+  const budgetAcum   = budgetMensal * months;
+  const pctBudget    = budgetAcum ? ((acum/budgetAcum)*100).toFixed(0) : '—';
+  const overBudget   = acum > budgetAcum;
   document.getElementById('home-hero').innerHTML=`
     <div class="hero-main">
       <div class="hero-label">Acumulado 2026</div>
-      <div class="hero-value">${fmt(acum)}</div>
-      <div class="hero-sub">${months} ${months===1?'mês':'meses'} registrados</div>
+      <div class="hero-value" onclick="openDetail('TOTAL')">${fmt(acum)}</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
+        <div class="hero-sub">${months} ${months===1?'mês':'meses'} registrados</div>
+        <div class="hero-budget-badge ${overBudget?'over':'ok'}" onclick="showScreen('comparativo')">
+          ${pctBudget}% do orçado
+        </div>
+      </div>
     </div>
     <div class="hero-row">
-      <div class="hero-mini" onclick="selectHomeMonth('01')">
-        <div class="hero-mini-label">Janeiro</div>
-        <div class="hero-mini-val">${fmt(jan.total)}</div>
-      </div>
-      <div class="hero-divider"></div>
-      <div class="hero-mini" onclick="selectHomeMonth('02')">
-        <div class="hero-mini-label">Fevereiro</div>
-        <div class="hero-mini-val">${fmt(fev.total)}</div>
-      </div>
+      ${[...Array(months)].map((_,i)=>{
+        const mo=String(i+1).padStart(2,'0');
+        const ag=aggregate(STATE.txs,i+1);
+        return `<div class="hero-mini" onclick="selectHomeMonth('${mo}')">
+          <div class="hero-mini-label">${MNAMES[i]}</div>
+          <div class="hero-mini-val">${fmt(ag.total)}</div>
+        </div>${i<months-1?'<div class="hero-divider"></div>':''}`;
+      }).join('')}
     </div>`;
+
+  // Pizza acumulado Jan+Fev
+  renderHomePizza(txs);
+
+  // Evolução total vs orçado
+  const byM = byMonthTotals(txs);
+  const bMensal = Object.values(BUDGET).reduce((a,b)=>a+b,0);
+  document.getElementById('home-evolucao').innerHTML = monthBarChart(byM, bMensal);
 
   // Month pills + summary
   renderHomeMonthPills();
@@ -332,8 +370,12 @@ function renderMonthSummary() {
         <div class="msm-month">${mName} 2026</div>
         <div class="msm-total">${fmt(ag.total)}</div>
       </div>
-      <button class="btn" style="margin:0;padding:8px 14px;font-size:12px"
-        onclick="goToMonth('${homeMonth}')">Ver detalhes →</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn" style="margin:0;padding:8px 14px;font-size:12px;flex:1"
+          onclick="goToMonth('${homeMonth}')">Ver detalhes →</button>
+        <button class="btn" style="margin:0;padding:8px 14px;font-size:12px;flex:1;background:#1A2F5A"
+          onclick="gerarResumoPNG('${homeMonth}')">📤 Compartilhar</button>
+      </div>
     </div>
     <div class="msm-row">
       <div class="msm-kpi">
@@ -367,7 +409,37 @@ function goToMonth(m) {
 
 // ── DESPESAS ──────────────────────────────────────────
 let activeMonth='01';
-let despSort = 'valor_desc'; // valor_desc | valor_asc | alpha | budget_pct
+let despSort = 'valor_desc';
+
+function openDetailCat(tipo) {
+  const txs = STATE.txs, m = parseInt(activeMonth);
+  const filtered = txs.filter(t => {
+    if (!t.date || !t.date.startsWith(`2026-${activeMonth}`)) return false;
+    if (tipo==='fixa') return getCat(t.sub)==='Fixa';
+    return getCat(t.sub)!=='Fixa';
+  });
+  const total = filtered.reduce((a,t)=>a+(parseFloat(t.val)||0),0);
+  const label = tipo==='fixa'?'Despesas Fixas':'Despesas Variáveis';
+  // Reuse detail modal
+  document.getElementById('detail-title').textContent = label;
+  document.getElementById('detail-total').textContent = fmt(total)+' · '+filtered.length+' lançamentos';
+  document.getElementById('detail-chart').innerHTML = '';
+  const rev = reviewed.load();
+  document.getElementById('detail-list').innerHTML = filtered
+    .sort((a,b)=>b.val-a.val)
+    .map(t=>{
+      const st=rev[t.id], dot=st==='ok'?'✓':st?'✎':'·', dotC=st==='ok'?'#1A8C5B':st?'#A67C2E':'#ccc';
+      return `<div class="detail-row" onclick="openEditTx('${t.id}')" style="cursor:pointer">
+        <div style="color:${dotC};font-size:14px;width:16px;flex-shrink:0">${dot}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date} · ${t.sub}</div>
+        </div>
+        <div style="font-size:12px;font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
+      </div>`;
+    }).join('');
+  document.getElementById('detail-modal').classList.add('open');
+}
 
 function renderDespesas() {
   const txs=STATE.txs, m=parseInt(activeMonth), ag=aggregate(txs,m), total=ag.total;
@@ -394,7 +466,7 @@ function renderDespesas() {
   </div>`;
 
   document.getElementById('desp-table').innerHTML=sorted.length
-    ? hdr + sorted.map(([name,val],i)=>{
+    ? hdr + sorted.slice(0,10).map(([name,val],i)=>{
         const bud=BUDGET[name], over=bud&&val>bud;
         const barC=bud?(over?'#D63E50':'#1E9E63'):COLORS[i%COLORS.length];
         return `<div class="cat-row" onclick="openDetail('${name}')">
@@ -409,14 +481,34 @@ function renderDespesas() {
       }).join('')
     : '<div style="padding:24px;text-align:center;color:var(--muted)">Sem dados para este mês</div>';
 
-  const top6=sorted.slice(0,6), others=sorted.slice(6).reduce((a,[,v])=>a+v,0);
-  const segs=top6.map(([label,v],i)=>({label,v,c:COLORS[i]}));
-  if (others>0) segs.push({label:'Outros',v:others,c:'#D0D0E0'});
-  document.getElementById('desp-donut').innerHTML=segs.length
-    ? donutSVG(segs)+`<div class="donut-legend-v">${segs.slice(0,5).map(s=>`
-        <div class="donut-leg-item"><div class="donut-leg-dot" style="background:${s.c}"></div>
-        <div class="donut-leg-name">${s.label}</div><div class="donut-leg-val">${fmtK(s.v)}</div>
-        <div class="donut-leg-pct">${pctOf(s.v,total)}</div></div>`).join('')}</div>`:'' ;
+  // 80% pizza — categorias que somam 80% das despesas
+  let cumul=0, segs80=[], others80=0;
+  sorted.forEach(([label,v],i)=>{
+    if(cumul/total<0.80){ segs80.push({label,v,c:COLORS[i%COLORS.length]}); cumul+=v; }
+    else others80+=v;
+  });
+  if(others80>0) segs80.push({label:'Demais',v:others80,c:'#C8D8E8'});
+  document.getElementById('desp-donut').innerHTML=segs80.length
+    ? donutSVG(segs80)+`<div class="donut-legend-v">${segs80.map(s=>`
+        <div class="donut-leg-item" onclick="openDetail('${s.label}')" style="cursor:pointer">
+          <div class="donut-leg-dot" style="background:${s.c}"></div>
+          <div class="donut-leg-name">${s.label}</div>
+          <div class="donut-leg-val">${fmtK(s.v)}</div>
+          <div class="donut-leg-pct">${pctOf(s.v,total)}</div>
+        </div>`).join('')}</div>`:'' ;
+
+  // Top 10 lançamentos individuais
+  const monthTxs = txs.filter(t=>t.date&&t.date.startsWith(`2026-${activeMonth}`)&&t.sub!=='NÃO CATEGORIZADO');
+  const top10txs = [...monthTxs].sort((a,b)=>parseFloat(b.val)-parseFloat(a.val)).slice(0,10);
+  document.getElementById('desp-top10-txs').innerHTML = top10txs.map((t,i)=>`
+    <div class="cat-row" onclick="openEditTx('${t.id}')" style="cursor:pointer">
+      <div style="font-size:11px;color:var(--muted);width:18px;flex-shrink:0;font-weight:600">#${i+1}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date} · <span style="color:var(--blue)">${t.sub}</span></div>
+      </div>
+      <div style="font-size:13px;font-weight:600;color:var(--red);font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
+    </div>`).join('');
 
   const fixa=ag.fixaM[activeMonth]||0, vari=ag.varM[activeMonth]||0;
   document.getElementById('desp-kpi-total').textContent=fmt(total);
@@ -605,9 +697,36 @@ let reviewQueue=[], reviewIdx=0, swipeStartX=0;
 
 function renderRevisar() {
   const rev=reviewed.load();
-  reviewQueue=STATE.txs.filter(t=>!rev[t.id]).sort((a,b)=>a.date.localeCompare(b.date));
+  const minVal=threshold.get();
+  // Show threshold config at top
+  document.getElementById('review-threshold-val').textContent=fmt(minVal);
+  // Filter: not reviewed AND above threshold
+  reviewQueue=STATE.txs
+    .filter(t=>!rev[t.id] && (parseFloat(t.val)||0)>=minVal)
+    .sort((a,b)=>parseFloat(b.val)-parseFloat(a.val)); // highest first
   reviewIdx=0;
+  const skipped=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)<minVal).length;
+  document.getElementById('review-skipped').textContent=
+    skipped>0?`${skipped} lançamento${skipped>1?'s':''} abaixo do limite ignorado${skipped>1?'s':''}. Edite na aba Mensal se necessário.`:'';
   showReviewCard();
+}
+
+function setReviewThreshold() {
+  const input=document.getElementById('review-threshold-input');
+  const val=parseFloat(input.value);
+  if (!isNaN(val)&&val>=0) {
+    threshold.set(val);
+    document.getElementById('review-threshold-modal').classList.remove('open');
+    renderRevisar();
+    showToast(`Limite atualizado: ${fmt(val)}`,'ok');
+  }
+}
+function openThresholdModal() {
+  document.getElementById('review-threshold-input').value=threshold.get();
+  document.getElementById('review-threshold-modal').classList.add('open');
+}
+function closeThresholdModal() {
+  document.getElementById('review-threshold-modal').classList.remove('open');
 }
 
 function showReviewCard() {
@@ -625,6 +744,8 @@ function showReviewCard() {
 
   const selEl=document.getElementById('review-select');
   selEl.innerHTML=ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('');
+  const catEl=document.getElementById('review-cat');
+  if (catEl) catEl.value = t.cat||getCat(t.sub);
 
   document.getElementById('review-card').innerHTML=`
     <div class="rv-date">${t.date} · <span style="color:var(--muted);font-size:10px">${t.source||''}</span></div>
@@ -643,13 +764,19 @@ function approveCard() {
   animateCard('right',()=>{ reviewIdx++; showReviewCard(); });
 }
 
+function onReviewSubChange() {
+  const sub = document.getElementById('review-select').value;
+  document.getElementById('review-cat').value = getCat(sub);
+}
+
 function rejectCard() {
   if (reviewIdx>=reviewQueue.length) return;
-  const newSub=document.getElementById('review-select').value;
-  const t=reviewQueue[reviewIdx];
-  STATE.txs=STATE.txs.map(tx=>tx.id===t.id?{...tx,sub:newSub}:tx);
+  const newSub = document.getElementById('review-select').value;
+  const newCat = document.getElementById('review-cat').value;
+  const t = reviewQueue[reviewIdx];
+  STATE.txs = STATE.txs.map(tx=>tx.id===t.id?{...tx,sub:newSub,cat:newCat}:tx);
   cache.save(STATE.txs);
-  if (isConfigured()) sheetsPost({action:'updateTx',tx:{...t,sub:newSub}}).catch(()=>{});
+  if (isConfigured()) sheetsPost({action:'updateTx',tx:{...t,sub:newSub,cat:newCat}}).catch(()=>{});
   reviewed.reject(t.id,newSub);
   animateCard('left',()=>{ reviewIdx++; showReviewCard(); });
 }
@@ -687,18 +814,219 @@ function openDetail(subName) {
     const st=rev[t.id];
     const dot=st==='ok'?'✓':st?'✎':'·';
     const dotC=st==='ok'?'#1E9E63':st?'#A67C2E':'#ccc';
-    return `<div class="detail-row">
+    const catColor = getCat(t.sub)==='Fixa'?'var(--blue)':'var(--gold)';
+    return `<div class="detail-row" onclick="openEditTx('${t.id}')" style="cursor:pointer">
       <div style="color:${dotC};font-size:14px;width:16px;flex-shrink:0;margin-top:1px">${dot}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date}${t.obs?' · '+t.obs:''}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date}
+          <span style="color:${catColor};margin-left:4px">${getCat(t.sub)}</span>
+          ${t.obs?' · '+t.obs:''}
+        </div>
       </div>
-      <div style="font-size:12px;color:var(--text);font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:8px">
+        <div style="font-size:12px;color:var(--text);font-feature-settings:'tnum'">${fmt(parseFloat(t.val)||0)}</div>
+        <div style="font-size:10px;color:var(--muted)">✎</div>
+      </div>
     </div>`;
   }).join('');
   document.getElementById('detail-modal').classList.add('open');
 }
 function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
+
+
+
+// ── RESUMO PNG ────────────────────────────────────────
+async function gerarResumoPNG(mes) {
+  const txs   = STATE.txs;
+  const m     = parseInt(mes);
+  const mPrev = m > 1 ? m - 1 : null;
+  const ag    = aggregate(txs, m);
+  const agPrev= mPrev ? aggregate(txs, mPrev) : null;
+  const agAcum= aggregate(txs, null);
+  const mName = MNAMES[m - 1];
+  const mPrevName = mPrev ? MNAMES[mPrev-1] : null;
+
+  const fixa  = ag.fixaM[String(m).padStart(2,'0')]||0;
+  const vari  = ag.varM[String(m).padStart(2,'0')]||0;
+  const top5  = Object.entries(ag.bySub)
+    .filter(([k])=>k!=='NÃO CATEGORIZADO').sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const top5acum = Object.entries(agAcum.bySub)
+    .filter(([k])=>k!=='NÃO CATEGORIZADO').sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const maxTop = top5[0]?.[1]||1;
+  const maxAcum= top5acum[0]?.[1]||1;
+
+  // Canvas size
+  const W=800, H=1380;
+  const canvas=document.createElement('canvas');
+  canvas.width=W; canvas.height=H;
+  const ctx=canvas.getContext('2d');
+
+  // ── Background ──
+  const bgGrad=ctx.createLinearGradient(0,0,0,H);
+  bgGrad.addColorStop(0,'#1A2F5A'); bgGrad.addColorStop(0.08,'#2C6FAC');
+  bgGrad.addColorStop(0.12,'#F0F4F8'); bgGrad.addColorStop(1,'#F0F4F8');
+  ctx.fillStyle=bgGrad; ctx.fillRect(0,0,W,H);
+
+  // ── Header ──
+  ctx.fillStyle='rgba(255,255,255,.5)';
+  ctx.font='500 12px DM Sans,sans-serif'; ctx.textAlign='left';
+  ctx.fillText('PEDROZO · GESTÃO FINANCEIRA · 2026',48,46);
+  ctx.fillStyle='#fff';
+  ctx.font='300 40px Cormorant Garamond,serif';
+  ctx.fillText(`Resumo ${mName} 2026`,48,90);
+
+  const pad=48;
+  const cardX=pad-8, cardW=W-cardX*2;
+
+  // ── helper: white card ──
+  function card(y,h,radius=16){
+    ctx.fillStyle='#fff';
+    ctx.shadowColor='rgba(28,47,90,.08)'; ctx.shadowBlur=16; ctx.shadowOffsetY=4;
+    rr(ctx,cardX,y,cardW,h,radius); ctx.fill();
+    ctx.shadowColor='transparent'; ctx.shadowBlur=0; ctx.shadowOffsetY=0;
+  }
+
+  // ── helper: section label ──
+  function label(text,y){
+    ctx.fillStyle='#7A95AA'; ctx.font='600 10px DM Sans,sans-serif';
+    ctx.textAlign='left'; ctx.letterSpacing='0.12em';
+    ctx.fillText(text.toUpperCase(),pad,y);
+  }
+
+  // ── helper: bar ──
+  function bar(x,y,w,h,fill,track='#EBF1F7',r=4){
+    ctx.fillStyle=track; rr(ctx,x,y,w,h,r); ctx.fill();
+    ctx.fillStyle=fill;  rr(ctx,x,y,Math.max(w*fill.pct||fill,6),h,r); ctx.fill();
+  }
+
+  // ═══ SECTION 1 — MÊS ═══
+  let y=118;
+  label('Resumo do Mês',y); y+=20;
+  card(y,300);
+
+  // Total
+  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif'; ctx.textAlign='left';
+  ctx.fillText('TOTAL GASTO',pad+8,y+24);
+  ctx.fillStyle='#0D1B2A'; ctx.font='300 50px Cormorant Garamond,serif';
+  ctx.fillText(fmt(ag.total),pad+8,y+68);
+
+  // vs anterior
+  if(agPrev&&agPrev.total>0){
+    const diff=ag.total-agPrev.total, dp=((diff/agPrev.total)*100).toFixed(0);
+    ctx.fillStyle=diff>0?'#C0392B':'#1A8C5B';
+    ctx.font='400 12px DM Sans,sans-serif';
+    ctx.fillText(`${diff>0?'▲':'▼'} ${Math.abs(dp)}% vs ${mPrevName} (${fmt(agPrev.total)})`,pad+8,y+88);
+  }
+
+  // Fixas / Variáveis bars
+  const bw=cardW-32;
+  const fixaPct=ag.total?fixa/ag.total:0, variPct=ag.total?vari/ag.total:0;
+  let by=y+108;
+  ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,24,5); ctx.fill();
+  ctx.fillStyle='#2C6FAC'; rr(ctx,pad+8,by,Math.max(bw*fixaPct,6),24,5); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='600 11px DM Sans,sans-serif';
+  ctx.fillText(`Fixas  ${fmt(fixa)}  (${pctOf(fixa,ag.total)})`,pad+16,by+16); by+=34;
+
+  ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,24,5); ctx.fill();
+  ctx.fillStyle='#A67C2E'; rr(ctx,pad+8,by,Math.max(bw*variPct,6),24,5); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='600 11px DM Sans,sans-serif';
+  ctx.fillText(`Variáveis  ${fmt(vari)}  (${pctOf(vari,ag.total)})`,pad+16,by+16); by+=44;
+
+  // Top 5 categorias
+  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif';
+  ctx.fillText('TOP 5 CATEGORIAS',pad+8,by); by+=18;
+  top5.forEach(([name,val],i)=>{
+    const frac=val/maxTop;
+    ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,22,4); ctx.fill();
+    ctx.fillStyle=COLORS[i]; rr(ctx,pad+8,by,Math.max(bw*frac,6),22,4); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='500 11px DM Sans,sans-serif'; ctx.textAlign='left';
+    ctx.fillText(name,pad+16,by+15);
+    ctx.textAlign='right';
+    const bud=BUDGET[name];
+    ctx.fillText(fmt(val)+(bud?`  /  ${fmtK(bud)}`:''),W-pad-16,by+15);
+    ctx.textAlign='left'; by+=30;
+  });
+
+  // ═══ DIVIDER ═══
+  y+=320; 
+  ctx.strokeStyle='#D8E4EF'; ctx.lineWidth=1;
+  ctx.setLineDash([6,4]);
+  ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke();
+  ctx.setLineDash([]);
+  y+=20;
+
+  // ═══ SECTION 2 — ACUMULADO ═══
+  label('Acumulado 2026',y); y+=20;
+  card(y,320);
+
+  // Total acum
+  const meses=[...new Set(txs.map(t=>t.date?.slice(5,7)).filter(Boolean))];
+  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif'; ctx.textAlign='left';
+  ctx.fillText(`${meses.length} MESES REGISTRADOS`,pad+8,y+24);
+  ctx.fillStyle='#0D1B2A'; ctx.font='300 50px Cormorant Garamond,serif';
+  ctx.fillText(fmt(agAcum.total),pad+8,y+68);
+
+  // Budget anual progress
+  const budA=Object.values(BUDGET).reduce((a,b)=>a+b,0)*12;
+  const budPct=Math.min(agAcum.total/budA,1);
+  by=y+84;
+  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif';
+  ctx.fillText(`Budget Anual: ${fmt(budA)}`,pad+8,by); by+=16;
+  ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,12,4); ctx.fill();
+  ctx.fillStyle=budPct>0.8?'#C0392B':'#2C6FAC';
+  rr(ctx,pad+8,by,Math.max(bw*budPct,6),12,4); ctx.fill();
+  ctx.fillStyle='#0D1B2A'; ctx.font='500 11px DM Sans,sans-serif';
+  ctx.textAlign='right';
+  ctx.fillText(`${(budPct*100).toFixed(0)}% utilizado`,W-pad-8,by+10);
+  ctx.textAlign='left'; by+=30;
+
+  // Top 5 acumulado
+  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif';
+  ctx.fillText('TOP 5 CATEGORIAS — ACUMULADO',pad+8,by); by+=18;
+  top5acum.forEach(([name,val],i)=>{
+    const frac=val/maxAcum;
+    const bud=(BUDGET[name]||0)*meses.length;
+    const over=bud&&val>bud;
+    ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,22,4); ctx.fill();
+    ctx.fillStyle=over?'#C0392B':COLORS[i];
+    rr(ctx,pad+8,by,Math.max(bw*frac,6),22,4); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='500 11px DM Sans,sans-serif'; ctx.textAlign='left';
+    ctx.fillText(name,pad+16,by+15);
+    ctx.textAlign='right';
+    ctx.fillText(fmt(val)+(bud?`  /  ${fmtK(bud)}`:''),W-pad-16,by+15);
+    ctx.textAlign='left'; by+=30;
+  });
+
+  // ═══ FOOTER ═══
+  const now=new Date();
+  ctx.fillStyle='rgba(10,30,70,.3)'; ctx.font='400 11px DM Sans,sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText(`Gerado em ${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}`,W/2,H-20);
+
+  // ── Share ──
+  canvas.toBlob(blob=>{
+    const fname=`pedrozo-resumo-${mName.toLowerCase()}-2026.png`;
+    if(navigator.share&&navigator.canShare({files:[new File([blob],fname,{type:'image/png'})]})){
+      navigator.share({files:[new File([blob],fname,{type:'image/png'})],title:`Resumo ${mName} 2026`});
+    } else {
+      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fname; a.click();
+    }
+  },'image/png');
+}
+
+function rr(ctx,x,y,w,h,r=8){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y);
+  ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);
+  ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r);
+  ctx.quadraticCurveTo(x,y,x+r,y);
+  ctx.closePath();
+}
 
 
 // ── LANÇAMENTO MANUAL ─────────────────────────────────
@@ -722,6 +1050,58 @@ async function saveManual() {
   showToast(added>0?`✓ Lançamento adicionado!`:'Lançamento já existe','ok');
   closeManual();
   refreshAll();
+}
+
+// ── EDIT TRANSACTION ─────────────────────────────────
+function openEditTx(txId) {
+  const t = STATE.txs.find(x => x.id === txId);
+  if (!t) return;
+  document.getElementById('edittx-id').value   = txId;
+  document.getElementById('edittx-desc').textContent = t.desc;
+  document.getElementById('edittx-date').textContent = t.date;
+  document.getElementById('edittx-val').textContent  = fmt(parseFloat(t.val)||0);
+
+  const subEl = document.getElementById('edittx-sub');
+  subEl.innerHTML = ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('');
+
+  const catEl = document.getElementById('edittx-cat');
+  catEl.value = getCat(t.sub); // auto from map, but allow override
+
+  document.getElementById('edittx-modal').classList.add('open');
+}
+
+// Auto-update cat when sub changes
+function onEditSubChange() {
+  const sub = document.getElementById('edittx-sub').value;
+  document.getElementById('edittx-cat').value = getCat(sub);
+}
+
+async function saveEditTx() {
+  const txId  = document.getElementById('edittx-id').value;
+  const newSub = document.getElementById('edittx-sub').value;
+  const newCat = document.getElementById('edittx-cat').value;
+
+  // Update CAT_MAP override for this session
+  // (permanent fix: update the tx itself)
+  STATE.txs = STATE.txs.map(tx => tx.id===txId ? {...tx, sub:newSub, cat:newCat} : tx);
+  cache.save(STATE.txs);
+
+  if (isConfigured()) {
+    const t = STATE.txs.find(x=>x.id===txId);
+    sheetsPost({action:'updateTx', tx:t}).catch(()=>{});
+  }
+  reviewed.approve(txId);
+
+  closeEditTx();
+  // Refresh detail modal if open
+  const detailTitle = document.getElementById('detail-title').textContent;
+  if (detailTitle) openDetail(detailTitle);
+  refreshAll();
+  showToast('Lançamento atualizado ✓', 'ok');
+}
+
+function closeEditTx() {
+  document.getElementById('edittx-modal').classList.remove('open');
 }
 
 // ── IMPORT ────────────────────────────────────────────
@@ -760,6 +1140,8 @@ function parseCSV(text,type) {
 
 function handleFiles(files) {
   pendingTxs=[]; const logEl=document.getElementById('import-log'); logEl.innerHTML='';
+  document.getElementById('import-count').textContent='Lendo arquivos...';
+  document.getElementById('btn-confirm').disabled=true;
   let processed=0;
   Array.from(files).forEach(file=>{
     const reader=new FileReader();
@@ -770,29 +1152,230 @@ function handleFiles(files) {
       else if (fname.includes('unicred')||fname.includes('extrato-')) type='unicred';
       else if (fname.includes('itau')||fname.includes('extrato_conta')) type='itau';
       pendingTxs.push(...parseCSV(e.target.result,type));
-      if (++processed===files.length) {
-        logEl.innerHTML=pendingTxs.map(t=>`
-          <div class="log-item">
-            <div class="log-dot" style="background:${t.sub==='NÃO CATEGORIZADO'?'#D63E50':'#1E9E63'}"></div>
-            <div style="flex:1"><div class="log-desc">${t.desc.slice(0,42)}</div><div class="log-sub">${t.sub}</div></div>
-            <div class="log-val">${fmt(t.val)}</div>
-          </div>`).join('');
-        document.getElementById('import-count').textContent=`${pendingTxs.length} lançamentos detectados`;
-        document.getElementById('btn-confirm').disabled=pendingTxs.length===0;
-      }
+      if (++processed===files.length) showImportPreview();
     };
     reader.readAsText(file,'latin-1');
   });
 }
 
+function showImportPreview() {
+  const existing = cache.load();
+  const {fresh, dupes, exact} = detectDuplicates(pendingTxs, existing);
+  const logEl = document.getElementById('import-log');
+
+  let html='';
+
+  if (fresh.length>0) {
+    html+=`<div class="import-section-label import-ok">✓ ${fresh.length} novos — serão adicionados</div>`;
+    html+=fresh.map(t=>`<div class="log-item">
+      <div class="log-dot" style="background:${t.sub==='NÃO CATEGORIZADO'?'#C0392B':'#1A8C5B'}"></div>
+      <div style="flex:1"><div class="log-desc">${t.desc.slice(0,40)}</div>
+      <div class="log-sub">${t.date} · ${t.sub}</div></div>
+      <div class="log-val">${fmt(t.val)}</div></div>`).join('');
+  }
+
+  if (dupes.length>0) {
+    html+=`<div class="import-section-label import-warn">⚠ ${dupes.length} possíveis duplicatas — verifique</div>`;
+    html+=dupes.map(({tx,similar})=>`<div class="log-item" style="border-left:3px solid #E8A020">
+      <div class="log-dot" style="background:#E8A020"></div>
+      <div style="flex:1">
+        <div class="log-desc">${tx.desc.slice(0,38)}</div>
+        <div class="log-sub">${tx.date} · similar a: ${similar.date} ${similar.desc.slice(0,20)}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="log-val">${fmt(tx.val)}</div>
+        <label style="font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px">
+          <input type="checkbox" class="dupe-include" data-id="${tx.id}" style="width:12px;height:12px"> incluir
+        </label>
+      </div></div>`).join('');
+  }
+
+  if (exact.length>0) {
+    html+=`<div class="import-section-label import-muted">✗ ${exact.length} já existentes — ignorados</div>`;
+  }
+
+  logEl.innerHTML=html;
+  document.getElementById('import-count').textContent=
+    `${fresh.length} novos · ${dupes.length} a verificar · ${exact.length} ignorados`;
+  document.getElementById('btn-confirm').disabled=(fresh.length===0&&dupes.length===0);
+}
+
 async function confirmImport() {
   const btn=document.getElementById('btn-confirm');
   btn.disabled=true; btn.textContent='Salvando...';
-  const added=await syncTxs(pendingTxs);
-  showToast(`✓ ${added} novos lançamentos!`,'ok');
-  document.getElementById('import-count').textContent=`✓ ${added} adicionados — ${pendingTxs.length-added} já existiam`;
+
+  // Get checked dupes
+  const checkedDupes=[];
+  document.querySelectorAll('.dupe-include:checked').forEach(cb=>{
+    const tx=pendingTxs.find(t=>t.id===cb.dataset.id);
+    if(tx) checkedDupes.push(tx);
+  });
+
+  const existing=cache.load();
+  const {fresh}=detectDuplicates(pendingTxs,existing);
+  const toAdd=[...fresh,...checkedDupes];
+
+  const all=cache.load(); const keys=new Set(all.map(t=>t.id));
+  const realFresh=toAdd.filter(t=>!keys.has(t.id));
+  cache.save([...all,...realFresh]); STATE.txs=cache.load();
+
+  let added=realFresh.length;
+  if(isConfigured()&&realFresh.length>0){
+    try { await sheetsPost({action:'addTxs',txs:realFresh}); }
+    catch(e){ STATE.error='Salvo localmente'; }
+  }
+
+  showToast(`✓ ${added} novos lançamentos adicionados!`,'ok');
+  document.getElementById('import-count').textContent=`✓ ${added} adicionados`;
   btn.textContent='Confirmar Importação'; pendingTxs=[];
   refreshAll();
+}
+
+// ── HOME PIZZA ────────────────────────────────────────
+function renderHomePizza(txs) {
+  const ag = aggregate(txs, null); // all months
+  const top8 = Object.entries(ag.bySub)
+    .filter(([k]) => k !== 'NÃO CATEGORIZADO')
+    .sort((a,b) => b[1]-a[1]).slice(0, 8);
+  const others = Object.entries(ag.bySub)
+    .filter(([k]) => k !== 'NÃO CATEGORIZADO')
+    .sort((a,b) => b[1]-a[1]).slice(8)
+    .reduce((s,[,v]) => s+v, 0);
+  const segs = top8.map(([label,v],i) => ({label, v, c:COLORS[i]}));
+  if (others > 0) segs.push({label:'Outros', v:others, c:'#C8D8E8'});
+  const total = segs.reduce((s,x)=>s+x.v, 0);
+
+  const el = document.getElementById('home-pizza');
+  if (!el) return;
+  el.innerHTML = `<div class="pizza-wrap">
+    ${donutSVG(segs, 72, 72, 58, 28)}
+    <div style="position:absolute;top:50%;left:72px;transform:translate(-50%,-50%);text-align:center;pointer-events:none">
+      <div style="font-size:9px;color:var(--muted);letter-spacing:.08em">TOTAL</div>
+      <div style="font-family:'Cormorant Garamond',serif;font-size:18px;font-weight:400;color:var(--text)">${fmtK(total)}</div>
+    </div>
+    <div class="pizza-legend">
+      ${segs.map(s=>`<div class="pizza-leg-row">
+        <div class="pizza-leg-dot" style="background:${s.c}"></div>
+        <div class="pizza-leg-name">${s.label}</div>
+        <div class="pizza-leg-val">${fmtK(s.v)}</div>
+        <div class="pizza-leg-pct">${pctOf(s.v,total)}</div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+// ── DESVIOS ───────────────────────────────────────────
+function renderDesvios() {
+  const txs = STATE.txs;
+  const months = [...new Set(txs.map(t=>t.date?.slice(5,7)).filter(Boolean))].sort();
+  const lastM  = months[months.length-1];
+  const prevM  = months[months.length-2];
+  if (!lastM) { document.getElementById('desvios-content').innerHTML='<div style="padding:24px;text-align:center;color:var(--muted)">Sem dados</div>'; return; }
+
+  const agLast = aggregate(txs, parseInt(lastM));
+  const agPrev = prevM ? aggregate(txs, parseInt(prevM)) : null;
+  const mName  = MNAMES[parseInt(lastM)-1];
+  const mPrev  = prevM ? MNAMES[parseInt(prevM)-1] : null;
+
+  let html = '';
+
+  // ── 1. Acima do budget ──
+  const acimaBudget = Object.entries(agLast.bySub)
+    .filter(([k,v]) => BUDGET[k] && v > BUDGET[k])
+    .sort((a,b) => (b[1]/BUDGET[b[0]]) - (a[1]/BUDGET[a[0]]));
+
+  html += `<div class="dev-section-title">🔴 Acima do Budget — ${mName}</div>`;
+  if (acimaBudget.length === 0) {
+    html += `<div class="dev-empty">Nenhuma categoria acima do budget em ${mName}</div>`;
+  } else {
+    html += acimaBudget.map(([name,val]) => {
+      const bud = BUDGET[name];
+      const excesso = val - bud;
+      const pct = ((val/bud)*100).toFixed(0);
+      const barPct = Math.min((val/bud)*100, 200);
+      return `<div class="dev-card dev-danger" onclick="openDetail('${name}')">
+        <div class="dev-card-header">
+          <div class="dev-cat">${name}</div>
+          <div class="dev-badge-over">${pct}% do budget</div>
+        </div>
+        <div class="dev-nums">
+          <span class="dev-val-over">${fmt(val)}</span>
+          <span class="dev-sep">vs budget</span>
+          <span class="dev-bud">${fmt(bud)}</span>
+        </div>
+        <div class="dev-bar-track">
+          <div class="dev-bar-bud"></div>
+          <div class="dev-bar-fill dev-bar-over" style="width:${Math.min(barPct,100).toFixed(1)}%"></div>
+        </div>
+        <div class="dev-excesso">Excesso: +${fmt(excesso)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // ── 2. Maior crescimento vs mês anterior ──
+  if (agPrev) {
+    const crescimento = Object.entries(agLast.bySub)
+      .filter(([k]) => k !== 'NÃO CATEGORIZADO' && agPrev.bySub[k])
+      .map(([k,v]) => {
+        const prev = agPrev.bySub[k]||0;
+        const delta = v - prev;
+        const deltaPct = prev ? ((delta/prev)*100) : 0;
+        return [k, v, prev, delta, deltaPct];
+      })
+      .filter(([,,,delta]) => delta > 0)
+      .sort((a,b) => b[4]-a[4])
+      .slice(0, 5);
+
+    html += `<div class="dev-section-title">📈 Maior Crescimento — ${mPrev} → ${mName}</div>`;
+    if (crescimento.length === 0) {
+      html += `<div class="dev-empty">Sem crescimentos significativos</div>`;
+    } else {
+      html += crescimento.map(([name,val,prev,delta,deltaPct]) =>
+        `<div class="dev-card dev-warn" onclick="openDetail('${name}')">
+          <div class="dev-card-header">
+            <div class="dev-cat">${name}</div>
+            <div class="dev-badge-warn">+${deltaPct.toFixed(0)}%</div>
+          </div>
+          <div class="dev-nums">
+            <span style="color:var(--muted);font-size:11px">${mPrev}: ${fmt(prev)}</span>
+            <span class="dev-sep">→</span>
+            <span class="dev-val-over">${fmt(val)}</span>
+          </div>
+          <div class="dev-excesso" style="color:var(--red)">+${fmt(delta)} a mais</div>
+        </div>`
+      ).join('');
+    }
+  }
+
+  // ── 3. Top 3 maiores desvios absolutos ──
+  const top3abs = Object.entries(agLast.bySub)
+    .filter(([k]) => BUDGET[k])
+    .map(([k,v]) => [k, v, v - BUDGET[k]])
+    .filter(([,,d]) => d > 0)
+    .sort((a,b) => b[2]-a[2])
+    .slice(0, 3);
+
+  html += `<div class="dev-section-title">💰 Top 3 Desvios em Valor — ${mName}</div>`;
+  if (top3abs.length === 0) {
+    html += `<div class="dev-empty">Sem desvios em valor absoluto</div>`;
+  } else {
+    html += top3abs.map(([name,val,delta],i) =>
+      `<div class="dev-card" onclick="openDetail('${name}')">
+        <div class="dev-rank">#${i+1}</div>
+        <div style="flex:1">
+          <div class="dev-cat">${name}</div>
+          <div class="dev-nums" style="margin-top:4px">
+            <span class="dev-val-over">${fmt(val)}</span>
+            <span class="dev-sep">budget</span>
+            <span class="dev-bud">${fmt(BUDGET[name])}</span>
+          </div>
+        </div>
+        <div class="dev-delta">+${fmt(delta)}</div>
+      </div>`
+    ).join('');
+  }
+
+  document.getElementById('desvios-content').innerHTML = html;
 }
 
 // ── NAV ───────────────────────────────────────────────
@@ -1168,6 +1751,57 @@ function seedData() {
   ]);
 }
 
+// ── PIN ───────────────────────────────────────────────
+const PIN_HASH = '3003'; // PIN: 3003
+const SESSION_KEY = 'pedrozo_unlocked';
+let pinBuffer = '';
+
+function checkPinSession() {
+  // Session valid for 8 hours
+  const t = parseInt(sessionStorage.getItem(SESSION_KEY)||'0');
+  return Date.now() - t < 8 * 60 * 60 * 1000;
+}
+
+function unlockApp() {
+  sessionStorage.setItem(SESSION_KEY, Date.now().toString());
+  document.getElementById('pin-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  loadData();
+}
+
+function pinKey(digit) {
+  if (pinBuffer.length >= 4) return;
+  pinBuffer += digit;
+  updatePinDots();
+  if (pinBuffer.length === 4) {
+    setTimeout(() => {
+      if (pinBuffer === PIN_HASH) {
+        unlockApp();
+      } else {
+        pinBuffer = '';
+        updatePinDots();
+        const err = document.getElementById('pin-error');
+        err.textContent = 'PIN incorreto';
+        setTimeout(() => { err.textContent = ''; }, 1500);
+        // Shake dots
+        document.getElementById('pin-dots').classList.add('shake');
+        setTimeout(() => document.getElementById('pin-dots').classList.remove('shake'), 400);
+      }
+    }, 120);
+  }
+}
+
+function pinDel() {
+  pinBuffer = pinBuffer.slice(0, -1);
+  updatePinDots();
+}
+
+function updatePinDots() {
+  for (let i = 0; i < 4; i++) {
+    document.getElementById('pd'+i).classList.toggle('filled', i < pinBuffer.length);
+  }
+}
+
 // ── BOOT ──────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',()=>{
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
@@ -1180,5 +1814,15 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('detail-modal').addEventListener('click',e=>{
     if (e.target===document.getElementById('detail-modal')) closeDetail();
   });
-  loadData();
+  document.getElementById('edittx-modal').addEventListener('click',e=>{
+    if (e.target===document.getElementById('edittx-modal')) closeEditTx();
+  });
+  document.getElementById('review-threshold-modal').addEventListener('click',e=>{
+    if (e.target===document.getElementById('review-threshold-modal')) closeThresholdModal();
+  });
+  // PIN check
+  if (checkPinSession()) {
+    unlockApp();
+  }
+  // else PIN screen stays visible
 });
