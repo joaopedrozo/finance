@@ -420,3 +420,42 @@ select {
   padding:9px 0; border-bottom:1px solid rgba(226,226,234,.5);
 }
 .detail-row:last-child { border-bottom:none; }
+
+/* ── MANUAL ENTRY ── */
+.btn-add {
+  width:32px; height:32px; border-radius:50%;
+  background:var(--gold); color:#fff; border:none;
+  font-size:20px; line-height:1; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  flex-shrink:0; box-shadow:0 2px 8px rgba(166,124,46,.3);
+}
+.manual-field {
+  display:flex; flex-direction:column; gap:5px; margin-bottom:12px;
+}
+.manual-field label {
+  font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.1em; font-weight:500;
+}
+.manual-field input, .manual-field select {
+  padding:10px 12px; border:1px solid var(--border); border-radius:8px;
+  background:var(--s2); color:var(--text); font-size:14px; font-family:inherit;
+  -webkit-appearance:none; outline:none;
+}
+.manual-field input:focus, .manual-field select:focus {
+  border-color:var(--gold); background:var(--s1);
+}
+
+/* ── BUDGET TABLE ── */
+.cmp-scroll-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.bud-table { border-collapse:collapse; font-size:11px; white-space:nowrap; width:100%; }
+.bud-table thead tr { background:var(--s2); border-bottom:2px solid var(--border); }
+.bud-table th { padding:8px 6px; color:var(--muted); font-weight:600; text-align:left; font-size:10px; letter-spacing:.06em; text-transform:uppercase; }
+.bud-table td { padding:8px 6px; border-bottom:1px solid rgba(226,226,234,.5); color:var(--text); }
+.bud-table tr:last-child td { border-bottom:none; }
+.bud-table tr:active { background:var(--s2); }
+.bud-cat  { max-width:110px; overflow:hidden; text-overflow:ellipsis; }
+.bud-bud  { color:var(--muted); font-feature-settings:'tnum'; }
+.bud-m    { font-feature-settings:'tnum'; text-align:right; }
+.bud-tot  { font-feature-settings:'tnum'; font-weight:600; text-align:right; color:var(--text); }
+.cell-ok    { color:var(--text); }
+.cell-over  { color:var(--red); font-weight:600; }
+.cell-empty { color:var(--border); }

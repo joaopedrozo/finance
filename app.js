@@ -80,6 +80,15 @@ const BUDGET = {
   'APTO':8000,'PREVIDENCIA /  VIDA':2500,
 };
 
+
+// ── CAT MAP — fonte da verdade ────────────────────────
+const CAT_MAP = {
+  'CATARINA':'Fixa','CARRO':'Fixa','FUNCIONÁRIAS':'Fixa','SEGUROS':'Fixa',
+  'APTO':'Fixa','PREVIDENCIA /  VIDA':'Fixa','ASSINATURAS':'Fixa',
+  'CONDOMÍNIO':'Fixa','LUZ':'Fixa',
+};
+function getCat(sub) { return CAT_MAP[sub] || 'Variáveis'; }
+
 // ── SHEETS ────────────────────────────────────────────
 const isConfigured = () => SHEETS_URL && !SHEETS_URL.includes('COLE_AQUI');
 async function sheetsGet(action) {
@@ -161,7 +170,7 @@ function aggregate(txs, month) {
     if (!t.sub||t.sub==='nan') return;
     bySub[t.sub]=(bySub[t.sub]||0)+parseFloat(t.val)||0;
     const m=t.date?t.date.slice(5,7):'00';
-    if (t.cat==='Fixa') fixaM[m]=(fixaM[m]||0)+(parseFloat(t.val)||0);
+    const tcat=getCat(t.sub); if (tcat==='Fixa') fixaM[m]=(fixaM[m]||0)+(parseFloat(t.val)||0);
     else varM[m]=(varM[m]||0)+(parseFloat(t.val)||0);
   });
   return {bySub, total:Object.values(bySub).reduce((a,b)=>a+b,0), fixaM, varM};
@@ -326,30 +335,21 @@ function renderDespesas() {
 function setMonth(m) { activeMonth=m; renderDespesas(); }
 
 // ── COMPARATIVO ───────────────────────────────────────
-function renderComparativo() {
-  const txs=STATE.txs, jan=aggregate(txs,1), fev=aggregate(txs,2);
-  const allKeys=new Set([...Object.keys(jan.bySub),...Object.keys(fev.bySub)]);
-  allKeys.delete('NÃO CATEGORIZADO');
-  const sorted=[...allKeys].sort((a,b)=>(jan.bySub[b]||0)-(jan.bySub[a]||0));
+let cmpView = 'mensal'; // 'mensal' | 'anual'
 
-  // Monthly bar chart
+function renderComparativo() {
+  const txs=STATE.txs;
   const byM=byMonthTotals(txs);
   document.getElementById('cmp-barchart').innerHTML=monthBarChart(byM,null);
 
-  document.getElementById('cmp-rows').innerHTML=`
-    <div class="cmp-row cmp-hdr">
-      <div class="cmp-name">Categoria</div><div class="cmp-j">Jan</div><div class="cmp-f">Fev</div><div class="cmp-d">Δ</div>
-    </div>`+sorted.map(k=>{
-      const j=jan.bySub[k]||0,f=fev.bySub[k]||0,d=f-j;
-      const dp=j?((d/j)*100).toFixed(0):null, cls=d>0?'cmp-up':'cmp-dn';
-      return `<div class="cmp-row" onclick="openDetail('${k}')">
-        <div class="cmp-name">${k}</div>
-        <div class="cmp-j">${j?fmtK(j):'—'}</div>
-        <div class="cmp-f">${f?fmtK(f):'—'}</div>
-        <div class="cmp-d ${j&&f?cls:''}">${j&&f?(d>0?'↑':'↓')+Math.abs(dp)+'%':'—'}</div>
-      </div>`;
-    }).join('');
+  // Toggle buttons
+  document.getElementById('cmp-toggle-mensal').classList.toggle('active', cmpView==='mensal');
+  document.getElementById('cmp-toggle-anual').classList.toggle('active',  cmpView==='anual');
 
+  if (cmpView==='mensal') renderCmpMensal(txs);
+  else                    renderCmpAnual(txs);
+
+  const jan=aggregate(txs,1), fev=aggregate(txs,2);
   const fixaA=(jan.fixaM['01']||0)+(fev.fixaM['02']||0);
   const varA=(jan.varM['01']||0)+(fev.varM['02']||0);
   const totA=fixaA+varA;
@@ -362,28 +362,143 @@ function renderComparativo() {
     </div></div>`;
 }
 
+function setCmpView(v) { cmpView=v; renderComparativo(); }
+
+function renderCmpMensal(txs) {
+  // Categoria | Orç/mês | Jan | Fev | Mar | ... | Total
+  const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
+  const allSubs={};
+  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') {
+    if (!allSubs[t.sub]) allSubs[t.sub]={};
+    const m=t.date?t.date.slice(5,7):'00';
+    allSubs[t.sub][m]=(allSubs[t.sub][m]||0)+(parseFloat(t.val)||0);
+  }});
+  const sorted=Object.entries(allSubs).sort((a,b)=>{
+    const ta=Object.values(a[1]).reduce((x,y)=>x+y,0);
+    const tb=Object.values(b[1]).reduce((x,y)=>x+y,0);
+    return tb-ta;
+  });
+
+  const activeMths=months.filter(m=>sorted.some(([,mv])=>mv[m]));
+
+  let html=`<div class="cmp-scroll-wrap"><table class="bud-table">
+    <thead><tr>
+      <th class="bud-cat">Categoria</th>
+      <th class="bud-bud">Orç/mês</th>
+      ${activeMths.map(m=>`<th class="bud-m">${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][parseInt(m)-1]}</th>`).join('')}
+      <th class="bud-tot">Total</th>
+    </tr></thead><tbody>`;
+
+  sorted.forEach(([sub,byMonth])=>{
+    const bud=BUDGET[sub]||0;
+    const total=Object.values(byMonth).reduce((a,b)=>a+b,0);
+    html+=`<tr onclick="openDetail('${sub}')">
+      <td class="bud-cat">${sub}</td>
+      <td class="bud-bud">${bud?fmtK(bud):'—'}</td>
+      ${activeMths.map(m=>{
+        const v=byMonth[m]||0;
+        const over=bud&&v>bud;
+        return `<td class="bud-m ${over?'cell-over':v>0?'cell-ok':'cell-empty'}">${v>0?fmtK(v):'—'}</td>`;
+      }).join('')}
+      <td class="bud-tot">${fmtK(total)}</td>
+    </tr>`;
+  });
+
+  html+=`</tbody></table></div>`;
+  document.getElementById('cmp-rows').innerHTML=html;
+}
+
+function renderCmpAnual(txs) {
+  // Categoria | Orçado anual | Gasto acum. | Saldo | % usado
+  const allSubs={};
+  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO')
+    allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0);
+  });
+  const sorted=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]);
+
+  let html=`<table class="bud-table" style="width:100%">
+    <thead><tr>
+      <th class="bud-cat">Categoria</th>
+      <th class="bud-bud" style="text-align:right">Anual</th>
+      <th class="bud-bud" style="text-align:right">Gasto</th>
+      <th class="bud-bud" style="text-align:right">Saldo</th>
+      <th class="bud-m" style="text-align:right">%</th>
+    </tr></thead><tbody>`;
+
+  sorted.forEach(([sub,spent])=>{
+    const budA=(BUDGET[sub]||0)*12;
+    const saldo=budA-spent;
+    const pct=budA?Math.min((spent/budA*100),999):null;
+    const over=budA&&spent>budA;
+    html+=`<tr onclick="openDetail('${sub}')">
+      <td class="bud-cat">${sub}</td>
+      <td class="bud-bud" style="text-align:right;color:var(--muted)">${budA?fmtK(budA):'—'}</td>
+      <td class="bud-bud" style="text-align:right;color:var(--text)">${fmtK(spent)}</td>
+      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--green)'}">${budA?(over?'-':'')+fmtK(Math.abs(saldo)):'—'}</td>
+      <td class="bud-m" style="text-align:right">
+        ${pct!==null?`<span class="${over?'prog-over':'prog-ok'}">${pct.toFixed(0)}%</span>`:'—'}
+      </td>
+    </tr>`;
+  });
+
+  html+=`</tbody></table>`;
+  document.getElementById('cmp-rows').innerHTML=html;
+}
+
 // ── PATRIMÔNIO ────────────────────────────────────────
-function renderPatrimonio() {
-  const patLiq={'Domazzi Dividendos':3600000,'Dom Holding':4000000,'BTG Aplicações':867215,
-    'CDI':335584,'Adler Mont Blanc':338635,'XP Bolsa Americana':136445,'Avenue Dolarizado':202023};
-  const patImob={'Ed. Trompowsky Apto':4000000,'Domhaus':7000000,'Cotas Domazzi':4900000,'Carros':2000000};
-  const tL=Object.values(patLiq).reduce((a,b)=>a+b,0);
-  const tI=Object.values(patImob).reduce((a,b)=>a+b,0);
-  const tP=tL+tI;
-  const segs=[{label:'Líquido',v:tL,c:'#1E9E63'},{label:'Imobilizado',v:tI,c:'#2F6FE0'}];
+async function renderPatrimonio() {
+  document.getElementById('pat-donut').innerHTML='<div style="padding:24px;text-align:center;color:var(--muted);font-size:12px">Carregando...</div>';
+  document.getElementById('pat-items-liq').innerHTML='';
+  document.getElementById('pat-items-imob').innerHTML='';
+
+  let pat = null;
+  if (isConfigured()) {
+    try { pat = await sheetsGet('getPat'); } catch(e) {}
+  }
+
+  // Fallback vazio — instrui usuário a preencher no Sheets
+  if (!pat || Object.keys(pat).length===0) {
+    document.getElementById('pat-donut').innerHTML=`
+      <div style="padding:24px;text-align:center;color:var(--muted);font-size:12px;line-height:1.6">
+        Patrimônio não configurado.<br>
+        Preencha a aba <b>Patrimonio</b> no Google Sheets<br>com colunas: <b>grupo · nome · valor</b>
+      </div>`;
+    return;
+  }
+
+  const grupos = Object.keys(pat);
+  const totByGrupo = {};
+  grupos.forEach(g=>{ totByGrupo[g]=Object.values(pat[g]).reduce((a,b)=>a+b,0); });
+  const tP = Object.values(totByGrupo).reduce((a,b)=>a+b,0);
+
+  const COLORS_PAT = ['#1E9E63','#2F6FE0','#A67C2E','#7B5FD4','#D63E50'];
+  const segs = grupos.map((g,i)=>({label:g, v:totByGrupo[g], c:COLORS_PAT[i%COLORS_PAT.length]}));
+
   document.getElementById('pat-donut').innerHTML=`<div class="donut-row">${donutSVG(segs)}
     <div class="donut-legend-v">${segs.map(s=>`
       <div class="donut-leg-item"><div class="donut-leg-dot" style="background:${s.c}"></div>
       <div class="donut-leg-name">${s.label}</div><div class="donut-leg-val">${fmtK(s.v)}</div>
-      <div class="donut-leg-pct">${pctOf(s.v,tP)}</div></div>`).join('')}</div></div>`;
-  document.getElementById('pat-items-liq').innerHTML=Object.entries(patLiq).map(([n,v])=>`
-    <div class="pat-item"><div class="pat-item-dot" style="background:#1E9E63"></div>
-    <div class="pat-item-name">${n}</div><div class="pat-item-val">${fmtK(v)}</div>
-    <div class="pat-item-pct">${pctOf(v,tP)}</div></div>`).join('');
-  document.getElementById('pat-items-imob').innerHTML=Object.entries(patImob).map(([n,v])=>`
-    <div class="pat-item"><div class="pat-item-dot" style="background:#2F6FE0"></div>
-    <div class="pat-item-name">${n}</div><div class="pat-item-val">${fmtK(v)}</div>
-    <div class="pat-item-pct">${pctOf(v,tP)}</div></div>`).join('');
+      <div class="donut-leg-pct">${pctOf(s.v,tP)}</div></div>`).join('')}
+    </div></div>`;
+
+  // Render each group
+  const liqEl=document.getElementById('pat-items-liq');
+  const imobEl=document.getElementById('pat-items-imob');
+  liqEl.innerHTML=''; imobEl.innerHTML='';
+
+  grupos.forEach((g,i)=>{
+    const color=COLORS_PAT[i%COLORS_PAT.length];
+    const el=i===0?liqEl:imobEl;
+    el.innerHTML+=`<div class="pat-group-title" style="border-top:${i>0?'':'none'};margin-top:${i>0?'':'0'}">${g} · ${fmtK(totByGrupo[g])}</div>`;
+    Object.entries(pat[g]).forEach(([n,v])=>{
+      el.innerHTML+=`<div class="pat-item">
+        <div class="pat-item-dot" style="background:${color}"></div>
+        <div class="pat-item-name">${n}</div>
+        <div class="pat-item-val">${fmtK(v)}</div>
+        <div class="pat-item-pct">${pctOf(v,tP)}</div>
+      </div>`;
+    });
+  });
 }
 
 // ── REVISAR ───────────────────────────────────────────
@@ -485,6 +600,30 @@ function openDetail(subName) {
   document.getElementById('detail-modal').classList.add('open');
 }
 function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
+
+
+// ── LANÇAMENTO MANUAL ─────────────────────────────────
+function openManual() {
+  document.getElementById('manual-modal').classList.add('open');
+  document.getElementById('manual-sub').innerHTML = ALL_SUBS.map(s=>`<option value="${s}">${s}</option>`).join('');
+}
+function closeManual() { document.getElementById('manual-modal').classList.remove('open'); }
+
+async function saveManual() {
+  const date  = document.getElementById('manual-date').value;
+  const desc  = document.getElementById('manual-desc').value.trim();
+  const val   = parseFloat(document.getElementById('manual-val').value.replace(',','.'));
+  const sub   = document.getElementById('manual-sub').value;
+  const obs   = document.getElementById('manual-obs').value.trim();
+  if (!date||!desc||!val) { showToast('Preencha data, descrição e valor','warn'); return; }
+  const cat   = getCat(sub);
+  const id    = `manual_${date.replace(/-/g,'')}_${desc.slice(0,8).replace(/\s/g,'')}_${val}`;
+  const tx    = {id, date, desc, val, cat, sub, pessoa:'', obs, source:'manual'};
+  const added = await syncTxs([tx]);
+  showToast(added>0?`✓ Lançamento adicionado!`:'Lançamento já existe','ok');
+  closeManual();
+  refreshAll();
+}
 
 // ── IMPORT ────────────────────────────────────────────
 let pendingTxs=[];

@@ -16,6 +16,39 @@
 <div id="toast" class="toast"></div>
 <div id="loading-bar" class="loading-bar" style="display:none"></div>
 
+
+<!-- MANUAL ENTRY MODAL -->
+<div class="modal-overlay" id="manual-modal">
+  <div class="modal">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div class="modal-title">Lançamento Manual</div>
+      <span class="modal-close" onclick="closeManual()">×</span>
+    </div>
+    <div class="manual-field">
+      <label>Data</label>
+      <input type="date" id="manual-date">
+    </div>
+    <div class="manual-field">
+      <label>Descrição</label>
+      <input type="text" id="manual-desc" placeholder="Ex: Seguro saúde Jan">
+    </div>
+    <div class="manual-field">
+      <label>Valor (R$)</label>
+      <input type="number" id="manual-val" placeholder="0,00" step="0.01">
+    </div>
+    <div class="manual-field">
+      <label>Categoria</label>
+      <select id="manual-sub"></select>
+    </div>
+    <div class="manual-field">
+      <label>Observação (opcional)</label>
+      <input type="text" id="manual-obs" placeholder="Ex: Ref. Jan 2026">
+    </div>
+    <button class="btn" style="margin-top:8px" onclick="saveManual()">Salvar Lançamento</button>
+    <button class="btn btn-ghost" onclick="closeManual()">Cancelar</button>
+  </div>
+</div>
+
 <!-- DETAIL MODAL -->
 <div class="modal-overlay" id="detail-modal">
   <div class="modal">
@@ -42,6 +75,7 @@
     </div>
     <div class="header-right">
       <div class="header-month">2026</div>
+      <button class="btn-add" onclick="openManual()">+</button>
       <div id="sync-badge" class="sync-badge local">○ Local</div>
     </div>
   </div>
@@ -120,7 +154,7 @@
 
     <!-- COMPARATIVO -->
     <div id="screen-comparativo" class="screen">
-      <div class="section-label">Evolução Jan → Dez</div>
+      <div class="section-label">Evolução Mensal 2026</div>
       <div class="card" style="margin-bottom:12px">
         <div class="card-body" style="padding-top:16px" id="cmp-barchart"></div>
       </div>
@@ -128,8 +162,12 @@
       <div class="card" style="margin-bottom:12px">
         <div class="card-body"><div id="cmp-donut"></div></div>
       </div>
-      <div class="section-label">Jan × Fev por Categoria</div>
-      <div class="card">
+      <div class="section-label">Orçado vs Realizado</div>
+      <div style="display:flex;gap:8px;padding:0 16px 10px">
+        <button id="cmp-toggle-mensal" class="pill active" onclick="setCmpView('mensal')">Por mês</button>
+        <button id="cmp-toggle-anual"  class="pill"        onclick="setCmpView('anual')">Resumo anual</button>
+      </div>
+      <div class="card" style="overflow:hidden">
         <div id="cmp-rows"></div>
       </div>
       <div style="height:8px"></div>
