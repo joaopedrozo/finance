@@ -13,10 +13,23 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<!-- Toast -->
 <div id="toast" class="toast"></div>
-<!-- Loading bar -->
 <div id="loading-bar" class="loading-bar" style="display:none"></div>
+
+<!-- DETAIL MODAL -->
+<div class="modal-overlay" id="detail-modal">
+  <div class="modal">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px">
+      <div>
+        <div class="modal-title" id="detail-title"></div>
+        <div style="font-size:11px;color:var(--muted)" id="detail-total"></div>
+      </div>
+      <span class="modal-close" onclick="closeDetail()">×</span>
+    </div>
+    <div id="detail-chart" style="margin:12px 0"></div>
+    <div id="detail-list"></div>
+  </div>
+</div>
 
 <div id="app">
   <div class="statusbar"></div>
@@ -33,17 +46,21 @@
     </div>
   </div>
 
-  <!-- SCROLL AREA -->
   <div class="scroll-area">
 
-    <!-- ══ INÍCIO ══ -->
+    <!-- HOME -->
     <div id="screen-home" class="screen active">
       <div class="section-label">Visão Geral</div>
       <div class="kpi-strip" id="home-kpis"></div>
 
-      <div class="section-label" style="margin-top:16px">Composição Mensal</div>
+      <div class="section-label">Evolução Mensal 2026</div>
       <div class="card">
-        <div class="card-body" style="padding-top:14px" id="home-comp"></div>
+        <div class="card-body" style="padding-top:16px" id="home-evolucao"></div>
+      </div>
+
+      <div class="section-label">Budget Anual — Progresso</div>
+      <div class="card">
+        <div class="card-body" style="padding-top:14px" id="home-budget"></div>
       </div>
 
       <div class="section-label">Alertas</div>
@@ -56,15 +73,15 @@
           <span class="tag tag-green">R$ 27,4M</span>
         </div>
         <div class="card-body">
-          <div style="display:flex;gap:16px;margin-bottom:12px">
+          <div style="display:flex;gap:12px">
             <div style="flex:1;padding:12px;background:var(--s2);border-radius:8px;border:1px solid var(--border)">
               <div style="font-size:9px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Líquido</div>
-              <div style="font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:300;color:var(--green)">R$ 9,5M</div>
+              <div style="font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:400;color:var(--green)">R$ 9,5M</div>
               <div style="font-size:10px;color:var(--muted);margin-top:3px">35% do total</div>
             </div>
             <div style="flex:1;padding:12px;background:var(--s2);border-radius:8px;border:1px solid var(--border)">
               <div style="font-size:9px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Imobilizado</div>
-              <div style="font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:300;color:var(--blue)">R$ 17,9M</div>
+              <div style="font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:400;color:var(--blue)">R$ 17,9M</div>
               <div style="font-size:10px;color:var(--muted);margin-top:3px">65% do total</div>
             </div>
           </div>
@@ -73,76 +90,61 @@
       <div style="height:8px"></div>
     </div>
 
-    <!-- ══ DESPESAS ══ -->
+    <!-- DESPESAS -->
     <div id="screen-despesas" class="screen">
       <div class="month-pills" id="month-pills"></div>
-
       <div class="card" style="margin-bottom:12px">
         <div class="card-header">
-          <div class="card-title">Total</div>
-          <div style="text-align:right">
-            <div id="desp-kpi-total" style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:300;color:var(--red)"></div>
-          </div>
+          <div class="card-title">Total do Mês</div>
+          <div id="desp-kpi-total" style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:400;color:var(--red)"></div>
         </div>
         <div class="card-body">
-          <div style="display:flex;gap:20px">
-            <div>
-              <div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Fixas</div>
-              <div id="desp-kpi-fixa" style="font-size:12px;color:var(--blue)"></div>
-            </div>
-            <div>
-              <div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Variáveis</div>
-              <div id="desp-kpi-var" style="font-size:12px;color:var(--gold)"></div>
-            </div>
+          <div style="display:flex;gap:24px">
+            <div><div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Fixas</div>
+              <div id="desp-kpi-fixa" style="font-size:12px;color:var(--blue)"></div></div>
+            <div><div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Variáveis</div>
+              <div id="desp-kpi-var" style="font-size:12px;color:var(--gold)"></div></div>
           </div>
         </div>
       </div>
-
       <div class="card" style="margin-bottom:12px">
         <div class="card-header"><div class="card-title">Composição</div></div>
-        <div class="card-body">
-          <div class="donut-row" id="desp-donut"></div>
-        </div>
+        <div class="card-body"><div class="donut-row" id="desp-donut"></div></div>
       </div>
-
       <div class="card">
-        <div class="card-header"><div class="card-title">Por Categoria</div></div>
+        <div class="card-header"><div class="card-title">Por Categoria</div><div style="font-size:10px;color:var(--muted)">Toque para detalhar</div></div>
         <div class="card-body" id="desp-table"></div>
       </div>
       <div style="height:8px"></div>
     </div>
 
-    <!-- ══ COMPARATIVO ══ -->
+    <!-- COMPARATIVO -->
     <div id="screen-comparativo" class="screen">
-      <div class="section-label">Jan × Fev — Acumulado</div>
+      <div class="section-label">Evolução Jan → Dez</div>
       <div class="card" style="margin-bottom:12px">
-        <div class="card-header"><div class="card-title">Fixo vs Variável</div></div>
-        <div class="card-body">
-          <div id="cmp-donut"></div>
-        </div>
+        <div class="card-body" style="padding-top:16px" id="cmp-barchart"></div>
       </div>
-
-      <div class="section-label">Variação por Categoria</div>
+      <div class="section-label">Fixo vs Variável — Acumulado</div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-body"><div id="cmp-donut"></div></div>
+      </div>
+      <div class="section-label">Jan × Fev por Categoria</div>
       <div class="card">
         <div id="cmp-rows"></div>
       </div>
       <div style="height:8px"></div>
     </div>
 
-    <!-- ══ PATRIMÔNIO ══ -->
+    <!-- PATRIMÔNIO -->
     <div id="screen-patrimonio" class="screen">
       <div class="pat-total-block">
         <div class="pat-big">R$ 27,4M</div>
         <div class="pat-sub">Posição Patrimonial · Fevereiro 2026</div>
       </div>
-
       <div class="card" style="margin-bottom:12px">
         <div class="card-header"><div class="card-title">Alocação</div></div>
-        <div class="card-body">
-          <div id="pat-donut"></div>
-        </div>
+        <div class="card-body"><div id="pat-donut"></div></div>
       </div>
-
       <div class="card">
         <div class="pat-group-title" style="border-top:none;margin-top:0">Ativos Líquidos · R$ 9.479.902</div>
         <div id="pat-items-liq"></div>
@@ -152,81 +154,90 @@
       <div style="height:8px"></div>
     </div>
 
-    <!-- ══ IMPORTAR ══ -->
-    <div id="screen-import" class="screen">
-      <div class="section-label">Importar Extrato</div>
+    <!-- REVISAR -->
+    <div id="screen-revisar" class="screen">
+      <div class="section-label">Revisar Lançamentos</div>
 
-      <div class="import-zone" id="drop-zone">
-        <div class="import-icon">📂</div>
-        <div class="import-title">Arraste ou toque para importar</div>
-        <div class="import-sub">Aceita: <b>Itaú CSV</b> · <b>Unicred XLS/CSV</b> · <b>Fatura CSV</b></div>
-      </div>
-      <input type="file" id="file-input" accept=".csv,.xls,.xlsx" multiple>
+      <div id="review-card-wrap">
+        <div style="padding:0 16px 8px;display:flex;align-items:center;gap:12px">
+          <div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+            <div id="review-prog-fill" style="height:100%;background:var(--gold);border-radius:2px;transition:width .3s"></div>
+          </div>
+          <div id="review-progress" style="font-size:11px;color:var(--muted);white-space:nowrap"></div>
+        </div>
 
-      <div style="padding:0 16px 8px;font-size:12px;color:var(--muted)" id="import-count"></div>
-      <div class="import-log" id="import-log"></div>
+        <div class="review-card" id="review-card"></div>
 
-      <button class="btn" id="btn-confirm" disabled onclick="confirmImport()">Confirmar Importação</button>
-      <button class="btn btn-ghost" onclick="showScreen('home')">Cancelar</button>
-
-      <div class="section-label" style="margin-top:8px">Como usar</div>
-      <div class="card">
-        <div class="card-body" style="padding-top:14px">
-          <div style="display:flex;flex-direction:column;gap:12px">
-            <div style="display:flex;gap:12px;align-items:flex-start">
-              <div style="width:24px;height:24px;border-radius:50%;background:var(--golddim);border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--gold);flex-shrink:0">1</div>
-              <div>
-                <div style="font-size:12px;color:var(--text);font-weight:500">Baixe o extrato do banco</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:2px">Itaú → Extrato CSV · Unicred → Extrato XLS ou Fatura CSV</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:12px;align-items:flex-start">
-              <div style="width:24px;height:24px;border-radius:50%;background:var(--golddim);border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--gold);flex-shrink:0">2</div>
-              <div>
-                <div style="font-size:12px;color:var(--text);font-weight:500">Importe aqui</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:2px">O app categoriza automaticamente com as suas regras</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:12px;align-items:flex-start">
-              <div style="width:24px;height:24px;border-radius:50%;background:var(--golddim);border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--gold);flex-shrink:0">3</div>
-              <div>
-                <div style="font-size:12px;color:var(--text);font-weight:500">Revise e confirme</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:2px">Dashboard atualiza na hora, funciona offline</div>
-              </div>
-            </div>
+        <div style="padding:0 16px 8px">
+          <div class="select-row">
+            <div class="select-label">Corrigir categoria para</div>
+            <select id="review-select"></select>
           </div>
         </div>
+
+        <div style="display:flex;gap:10px;padding:0 16px 8px">
+          <button class="btn btn-ghost" style="flex:1;margin:0;padding:12px" onclick="rejectCard()">✎ Corrigir</button>
+          <button class="btn" style="flex:2;margin:0;padding:12px;background:var(--green);border:none" onclick="approveCard()">✓ Aprovado</button>
+        </div>
+        <div style="text-align:center;padding:4px 0 16px">
+          <span onclick="skipCard()" style="font-size:11px;color:var(--muted);cursor:pointer">Pular →</span>
+        </div>
+        <div style="text-align:center;padding:0 16px 12px;font-size:11px;color:var(--muted)">
+          Deslize para direita ✓ aprovado · para esquerda ✎ corrigir
+        </div>
+      </div>
+
+      <div id="review-done" style="display:none;flex-direction:column;align-items:center;padding:48px 24px;text-align:center">
+        <div style="font-size:48px;margin-bottom:16px">✓</div>
+        <div style="font-size:18px;font-family:'Cormorant Garamond',serif;color:var(--text);margin-bottom:8px">Tudo revisado!</div>
+        <div style="font-size:12px;color:var(--muted)">Todos os lançamentos foram aprovados ou corrigidos</div>
+        <button class="btn" style="margin-top:24px" onclick="showScreen('home')">Voltar ao início</button>
       </div>
       <div style="height:8px"></div>
     </div>
 
-  </div><!-- end scroll-area -->
+    <!-- IMPORTAR -->
+    <div id="screen-import" class="screen">
+      <div class="section-label">Importar Extrato</div>
+      <div class="import-zone" id="drop-zone">
+        <div class="import-icon">📂</div>
+        <div class="import-title">Arraste ou toque para importar</div>
+        <div class="import-sub">Aceita: <b>Itaú CSV</b> · <b>Unicred CSV/XLS</b> · <b>Fatura CSV</b></div>
+      </div>
+      <input type="file" id="file-input" accept=".csv,.xls,.xlsx" multiple>
+      <div style="padding:0 16px 8px;font-size:12px;color:var(--muted)" id="import-count"></div>
+      <div class="import-log" id="import-log"></div>
+      <button class="btn" id="btn-confirm" disabled onclick="confirmImport()">Confirmar Importação</button>
+      <button class="btn btn-ghost" onclick="showScreen('home')">Cancelar</button>
+      <div style="height:8px"></div>
+    </div>
+
+  </div><!-- scroll-area -->
 
   <!-- BOTTOM NAV -->
   <div class="bottom-nav">
     <div class="nav-item active" id="nav-home" onclick="showScreen('home')">
-      <div class="nav-icon">◈</div>
-      <div>Início</div>
+      <div class="nav-icon">◈</div><div>Início</div>
     </div>
     <div class="nav-item" id="nav-despesas" onclick="showScreen('despesas')">
-      <div class="nav-icon">◎</div>
-      <div>Despesas</div>
+      <div class="nav-icon">◎</div><div>Despesas</div>
     </div>
     <div class="nav-item" id="nav-comparativo" onclick="showScreen('comparativo')">
-      <div class="nav-icon">⇄</div>
-      <div>Comparar</div>
+      <div class="nav-icon">⇄</div><div>Comparar</div>
     </div>
     <div class="nav-item" id="nav-patrimonio" onclick="showScreen('patrimonio')">
-      <div class="nav-icon">◇</div>
-      <div>Patrimônio</div>
+      <div class="nav-icon">◇</div><div>Patrimônio</div>
+    </div>
+    <div class="nav-item" id="nav-revisar" onclick="showScreen('revisar')" style="position:relative">
+      <div class="nav-icon">✓</div><div>Revisar</div>
+      <div id="review-badge" style="display:none;position:absolute;top:6px;right:16px;width:16px;height:16px;background:#D63E50;border-radius:50%;font-size:9px;color:#fff;align-items:center;justify-content:center;font-weight:700"></div>
     </div>
     <div class="nav-item" id="nav-import" onclick="showScreen('import')">
-      <div class="nav-icon">↑</div>
-      <div>Importar</div>
+      <div class="nav-icon">↑</div><div>Importar</div>
     </div>
   </div>
 
-</div><!-- end app -->
+</div>
 <script src="app.js"></script>
 </body>
 </html>
