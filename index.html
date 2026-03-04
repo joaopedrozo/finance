@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Finanças">
+<meta name="theme-color" content="#C9A84C">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>Pedrozo · Finanças</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div class="statusbar"></div>
+
+  <!-- HEADER -->
+  <div class="header">
+    <div>
+      <div class="header-title">Pedrozo</div>
+      <div class="header-sub">Gestão Financeira · 2026</div>
+    </div>
+    <div class="header-right">
+      <div class="header-month">Atualizado Mar 2026</div>
+    </div>
+  </div>
+
+  <!-- SCROLL AREA -->
+  <div class="scroll-area">
+
+    <!-- ══ INÍCIO ══ -->
+    <div id="screen-home" class="screen active">
+      <div class="section-label">Visão Geral</div>
+      <div class="kpi-strip" id="home-kpis"></div>
+
+      <div class="section-label" style="margin-top:16px">Composição Mensal</div>
+      <div class="card">
+        <div class="card-body" style="padding-top:14px" id="home-comp"></div>
+      </div>
+
+      <div class="section-label">Alertas</div>
+      <div id="home-alerts"></div>
+
+      <div class="section-label">Patrimônio</div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Posição Fev 2026</div>
+          <span class="tag tag-green">R$ 27,4M</span>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;gap:16px;margin-bottom:12px">
+            <div style="flex:1;padding:12px;background:var(--s2);border-radius:2px;border:1px solid var(--border)">
+              <div style="font-size:9px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Líquido</div>
+              <div style="font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:300;color:var(--green)">R$ 9,5M</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:3px">35% do total</div>
+            </div>
+            <div style="flex:1;padding:12px;background:var(--s2);border-radius:2px;border:1px solid var(--border)">
+              <div style="font-size:9px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Imobilizado</div>
+              <div style="font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:300;color:var(--blue)">R$ 17,9M</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:3px">65% do total</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="height:8px"></div>
+    </div>
+
+    <!-- ══ DESPESAS ══ -->
+    <div id="screen-despesas" class="screen">
+      <div class="month-pills" id="month-pills"></div>
+
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header">
+          <div class="card-title">Total</div>
+          <div style="text-align:right">
+            <div id="desp-kpi-total" style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:300;color:var(--red)"></div>
+          </div>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;gap:20px">
+            <div>
+              <div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Fixas</div>
+              <div id="desp-kpi-fixa" style="font-size:12px;color:var(--blue)"></div>
+            </div>
+            <div>
+              <div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Variáveis</div>
+              <div id="desp-kpi-var" style="font-size:12px;color:var(--gold)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header"><div class="card-title">Composição</div></div>
+        <div class="card-body">
+          <div class="donut-row" id="desp-donut"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">Por Categoria</div></div>
+        <div class="card-body" id="desp-table"></div>
+      </div>
+      <div style="height:8px"></div>
+    </div>
+
+    <!-- ══ COMPARATIVO ══ -->
+    <div id="screen-comparativo" class="screen">
+      <div class="section-label">Jan × Fev — Acumulado</div>
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header"><div class="card-title">Fixo vs Variável</div></div>
+        <div class="card-body">
+          <div id="cmp-donut"></div>
+        </div>
+      </div>
+
+      <div class="section-label">Variação por Categoria</div>
+      <div class="card">
+        <div id="cmp-rows"></div>
+      </div>
+      <div style="height:8px"></div>
+    </div>
+
+    <!-- ══ PATRIMÔNIO ══ -->
+    <div id="screen-patrimonio" class="screen">
+      <div class="pat-total-block">
+        <div class="pat-big">R$ 27,4M</div>
+        <div class="pat-sub">Posição Patrimonial · Fevereiro 2026</div>
+      </div>
+
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-header"><div class="card-title">Alocação</div></div>
+        <div class="card-body">
+          <div id="pat-donut"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="pat-group-title" style="border-top:none;margin-top:0">Ativos Líquidos · R$ 9.479.902</div>
+        <div id="pat-items-liq"></div>
+        <div class="pat-group-title">Ativos Imobilizados · R$ 17.900.000</div>
+        <div id="pat-items-imob"></div>
+      </div>
+      <div style="height:8px"></div>
+    </div>
+
+    <!-- ══ IMPORTAR ══ -->
+    <div id="screen-import" class="screen">
+      <div class="section-label">Importar Extrato</div>
+
+      <div class="import-zone" id="drop-zone">
+        <div class="import-icon">📂</div>
+        <div class="import-title">Arraste ou toque para importar</div>
+        <div class="import-sub">Aceita: <b>Itaú CSV</b> · <b>Unicred XLS/CSV</b> · <b>Fatura CSV</b></div>
+      </div>
+      <input type="file" id="file-input" accept=".csv,.xls,.xlsx" multiple>
+
+      <div style="padding:0 16px 8px;font-size:12px;color:var(--muted)" id="import-count"></div>
+      <div class="import-log" id="import-log"></div>
+
+      <button class="btn" id="btn-confirm" disabled onclick="confirmImport()">Confirmar Importação</button>
+      <button class="btn btn-ghost" onclick="showScreen('home')">Cancelar</button>
+
+      <div class="section-label" style="margin-top:8px">Como usar</div>
+      <div class="card">
+        <div class="card-body" style="padding-top:14px">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <div style="width:24px;height:24px;border-radius:50%;background:var(--golddim);border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--gold);flex-shrink:0">1</div>
+              <div>
+                <div style="font-size:12px;color:var(--text);font-weight:500">Baixe o extrato do banco</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">Itaú → Extrato CSV · Unicred → Extrato XLS ou Fatura CSV</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <div style="width:24px;height:24px;border-radius:50%;background:var(--golddim);border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--gold);flex-shrink:0">2</div>
+              <div>
+                <div style="font-size:12px;color:var(--text);font-weight:500">Importe aqui</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">O app categoriza automaticamente com as suas regras</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <div style="width:24px;height:24px;border-radius:50%;background:var(--golddim);border:1px solid var(--gold);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--gold);flex-shrink:0">3</div>
+              <div>
+                <div style="font-size:12px;color:var(--text);font-weight:500">Revise e confirme</div>
+                <div style="font-size:11px;color:var(--muted);margin-top:2px">Dashboard atualiza na hora, funciona offline</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="height:8px"></div>
+    </div>
+
+  </div><!-- end scroll-area -->
+
+  <!-- BOTTOM NAV -->
+  <div class="bottom-nav">
+    <div class="nav-item active" id="nav-home" onclick="showScreen('home')">
+      <div class="nav-icon">◈</div>
+      <div>Início</div>
+    </div>
+    <div class="nav-item" id="nav-despesas" onclick="showScreen('despesas')">
+      <div class="nav-icon">◎</div>
+      <div>Despesas</div>
+    </div>
+    <div class="nav-item" id="nav-comparativo" onclick="showScreen('comparativo')">
+      <div class="nav-icon">⇄</div>
+      <div>Comparar</div>
+    </div>
+    <div class="nav-item" id="nav-patrimonio" onclick="showScreen('patrimonio')">
+      <div class="nav-icon">◇</div>
+      <div>Patrimônio</div>
+    </div>
+    <div class="nav-item" id="nav-import" onclick="showScreen('import')">
+      <div class="nav-icon">↑</div>
+      <div>Importar</div>
+    </div>
+  </div>
+
+</div><!-- end app -->
+<script src="app.js"></script>
+</body>
+</html>

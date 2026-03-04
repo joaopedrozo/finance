@@ -1,0 +1,7 @@
+pedrozo-app/
+├── index.html          (shell do app)
+├── manifest.json       (PWA config — nome, ícone, cor)
+├── sw.js               (service worker — offline)
+├── app.js              (lógica principal)
+├── style.css           (tema dark gold)
+└── icons/              (ícones do app)
