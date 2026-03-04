@@ -1138,6 +1138,34 @@ function parseCSV(text,type) {
   return results;
 }
 
+// Expand parcelas: if desc has "XX/YY", create future installments
+function expandParcelas(txs) {
+  const extra = [];
+  txs.forEach(t => {
+    const m = t.desc.match(/(\d{2})\/(\d{2})/);
+    if (!m) return;
+    const cur = parseInt(m[1]), tot = parseInt(m[2]);
+    if (cur < 1 || tot < 2 || cur > tot) return;
+    const remaining = tot - cur;
+    const [y, mo, d] = t.date.split('-').map(Number);
+    for (let i = 1; i <= remaining; i++) {
+      let nm = mo + i, ny = y;
+      while (nm > 12) { nm -= 12; ny++; }
+      const ndate = `${ny}-${String(nm).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const nDesc = t.desc.replace(/\d{2}\/\d{2}/, `${String(cur+i).padStart(2,'0')}/${String(tot).padStart(2,'0')}`);
+      extra.push({
+        ...t,
+        id: `${t.id}_p${cur+i}`,
+        date: ndate,
+        desc: nDesc,
+        obs: t.obs ? t.obs + ` (parcela ${cur+i}/${tot})` : `parcela ${cur+i}/${tot}`,
+        source: t.source + '_parcela'
+      });
+    }
+  });
+  return [...txs, ...extra];
+}
+
 function handleFiles(files) {
   pendingTxs=[]; const logEl=document.getElementById('import-log'); logEl.innerHTML='';
   document.getElementById('import-count').textContent='Lendo arquivos...';
@@ -1151,7 +1179,7 @@ function handleFiles(files) {
       if (fname.includes('unicred')&&fname.includes('fatura')) type='card_unicred';
       else if (fname.includes('unicred')||fname.includes('extrato-')) type='unicred';
       else if (fname.includes('itau')||fname.includes('extrato_conta')) type='itau';
-      pendingTxs.push(...parseCSV(e.target.result,type));
+      pendingTxs.push(...expandParcelas(parseCSV(e.target.result,type)));
       if (++processed===files.length) showImportPreview();
     };
     reader.readAsText(file,'latin-1');
@@ -1265,7 +1293,6 @@ function renderHomePizza(txs) {
 }
 
 // ── DESVIOS ───────────────────────────────────────────
-function renderDesvios() {
   const txs = STATE.txs;
   const months = [...new Set(txs.map(t=>t.date?.slice(5,7)).filter(Boolean))].sort();
   const lastM  = months[months.length-1];

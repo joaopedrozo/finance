@@ -91,7 +91,7 @@ body {
   transition: color .15s;
 }
 .nav-item .nav-icon { font-size:20px; line-height:1; }
-.nav-item.active { color: var(--gold); }
+.nav-item.active { color: var(--blue); }
 .nav-item.active .nav-icon { transform: scale(1.1); }
 
 /* ── SCREENS ── */
