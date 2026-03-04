@@ -165,12 +165,24 @@ async function loadData(silent = false) {
 
   if (isConfigured()) {
     try {
-      STATE.txs   = await sheetsGet('getTxs');
+      let remoteTxs = await sheetsGet('getTxs');
+
+      // Sheets vazio — seed e envia tudo
+      if (!remoteTxs || remoteTxs.length === 0) {
+        seedData();
+        const localTxs = cache.load();
+        await sheetsPost({ action: 'addTxs', txs: localTxs });
+        remoteTxs = await sheetsGet('getTxs');
+        showToast('Dados historicos enviados ao Sheets!', 'ok');
+      }
+
+      STATE.txs    = remoteTxs;
       STATE.synced = true;
       cache.save(STATE.txs);
     } catch(e) {
       STATE.error  = 'Offline — usando cache local';
       STATE.txs    = cache.load();
+      if (STATE.txs.length === 0) { seedData(); STATE.txs = cache.load(); }
       STATE.synced = false;
     }
   } else {
