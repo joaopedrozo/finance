@@ -239,7 +239,7 @@ function donutSVG(segments, cx=60, cy=60, r=46, stroke=10) {
     offset -= dash;
   });
   return `<svg width="${cx*2}" height="${cy*2}" viewBox="0 0 ${cx*2} ${cy*2}" style="flex-shrink:0">
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#1A1E28" stroke-width="${stroke}"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#F0F0F5" stroke-width="${stroke}"/>
     ${paths}
   </svg>`;
 }

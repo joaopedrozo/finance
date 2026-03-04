@@ -1,20 +1,20 @@
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=DM+Sans:wght@300;400;500&display=swap');
 
 :root {
-  --bg:      #0B0D11;
-  --s1:      #13161D;
-  --s2:      #1A1E28;
-  --s3:      #222838;
-  --border:  #252A38;
-  --gold:    #C9A84C;
-  --gold2:   #E8C97A;
-  --golddim: #6B5523;
-  --green:   #4CAF82;
-  --red:     #E05C6A;
-  --blue:    #5B9CF6;
-  --text:    #E8EAF2;
-  --muted:   #5A617A;
-  --muted2:  #8890A8;
+  --bg:      #F5F5F7;
+  --s1:      #FFFFFF;
+  --s2:      #F0F0F5;
+  --s3:      #E8E8EF;
+  --border:  #E2E2EA;
+  --gold:    #A67C2E;
+  --gold2:   #8A6420;
+  --golddim: #FDF3E0;
+  --green:   #1E9E63;
+  --red:     #D63E50;
+  --blue:    #2F6FE0;
+  --text:    #111318;
+  --muted:   #8E8EA8;
+  --muted2:  #5A5A78;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bot: env(safe-area-inset-bottom, 0px);
 }
@@ -47,10 +47,11 @@ body {
   padding: 14px 20px 12px;
   flex-shrink: 0;
   display: flex; align-items: center; justify-content: space-between;
+  box-shadow: 0 1px 0 var(--border);
 }
 .header-title {
   font-family: 'Cormorant Garamond', serif;
-  font-size: 22px; font-weight: 300; color: var(--gold2);
+  font-size: 22px; font-weight: 400; color: var(--gold2);
   letter-spacing: .03em;
 }
 .header-sub { font-size: 10px; color: var(--muted); letter-spacing:.1em; text-transform:uppercase; }
@@ -79,6 +80,7 @@ body {
   display: flex;
   padding-bottom: var(--safe-bot);
   z-index: 100;
+  box-shadow: 0 -1px 12px rgba(0,0,0,.08);
 }
 .nav-item {
   flex:1; display:flex; flex-direction:column;
@@ -108,8 +110,9 @@ body {
 .kpi-card {
   flex-shrink:0; min-width:140px;
   background:var(--s1); border:1px solid var(--border);
-  border-top: 2px solid var(--golddim);
-  padding:14px 16px; border-radius:2px;
+  border-top: 2px solid var(--border);
+  padding:14px 16px; border-radius:8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
 }
 .kpi-card.highlight { border-top-color: var(--gold); }
 .kpi-label { font-size:9px; font-weight:500; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
@@ -126,7 +129,8 @@ body {
 .card {
   margin:0 16px 12px;
   background:var(--s1); border:1px solid var(--border);
-  border-radius:2px; overflow:hidden;
+  border-radius:12px; overflow:hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
 }
 .card-header {
   padding:14px 16px 10px;
@@ -198,11 +202,12 @@ body {
 /* ── IMPORT SCREEN ── */
 .import-zone {
   margin:16px; border:2px dashed var(--border);
-  border-radius:4px; padding:40px 20px;
+  border-radius:12px; padding:40px 20px;
   text-align:center; cursor:pointer;
   transition: border-color .2s, background .2s;
+  background: var(--s2);
 }
-.import-zone:hover, .import-zone.drag { border-color:var(--gold); background:rgba(201,168,76,.04); }
+.import-zone:hover, .import-zone.drag { border-color:var(--gold); background: var(--golddim); }
 .import-icon { font-size:40px; margin-bottom:12px; }
 .import-title { font-size:14px; color:var(--text); margin-bottom:6px; }
 .import-sub { font-size:12px; color:var(--muted); }
@@ -212,7 +217,7 @@ body {
 .import-log {
   margin:0 16px 12px;
   background:var(--s2); border:1px solid var(--border);
-  border-radius:2px; max-height:200px; overflow-y:auto;
+  border-radius:8px; max-height:200px; overflow-y:auto;
 }
 .log-item {
   padding:9px 14px; border-bottom:1px solid rgba(37,42,56,.4);
@@ -227,15 +232,15 @@ body {
 .btn {
   display:block; width:calc(100% - 32px); margin:12px 16px;
   padding:14px; text-align:center;
-  background:var(--golddim); border:1px solid var(--gold);
-  color:var(--gold2); font-family:'DM Sans'; font-size:12px;
+  background:var(--gold2); border:none;
+  color:#FFF; font-family:'DM Sans'; font-size:12px;
   font-weight:500; letter-spacing:.12em; text-transform:uppercase;
-  cursor:pointer; border-radius:2px; transition: background .15s;
+  cursor:pointer; border-radius:10px; transition: opacity .15s;
 }
-.btn:hover { background:rgba(201,168,76,.25); }
-.btn:disabled { opacity:.4; cursor:not-allowed; }
+.btn:hover { opacity: .88; }
+.btn:disabled { opacity:.35; cursor:not-allowed; }
 .btn-ghost {
-  background:transparent; border-color:var(--border); color:var(--muted2);
+  background:var(--s2); border:1px solid var(--border); color:var(--muted2);
 }
 
 /* ── MONTH PILLS ── */
@@ -268,7 +273,7 @@ body {
 .alert-item {
   margin:0 16px 8px; padding:12px 14px;
   border-left:2px solid; background:var(--s2);
-  border-radius:0 2px 2px 0;
+  border-radius:0 8px 8px 0;
 }
 .alert-item.warn { border-color:var(--gold); }
 .alert-item.danger { border-color:var(--red); }
@@ -302,6 +307,7 @@ body {
   padding:20px 20px calc(20px + var(--safe-bot));
   animation: slideUp .25s ease;
   max-height:80dvh; overflow-y:auto;
+  box-shadow: 0 -8px 32px rgba(0,0,0,.12);
 }
 .modal-title { font-size:14px; font-weight:500; color:var(--text); margin-bottom:16px; }
 .modal-close { float:right; font-size:20px; color:var(--muted); cursor:pointer; }
@@ -313,7 +319,7 @@ select {
   width:100%; padding:10px 12px;
   background:var(--s2); border:1px solid var(--border);
   color:var(--text); font-family:'DM Sans'; font-size:13px;
-  border-radius:2px; appearance:none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235A617A'/%3E%3C/svg%3E");
+  border-radius:8px; appearance:none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238E8EA8'/%3E%3C/svg%3E");
   background-repeat:no-repeat; background-position: right 12px center;
 }
