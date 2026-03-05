@@ -263,31 +263,31 @@ function closeDetail() { document.getElementById('detail-modal').classList.remov
 
 function openEditTx(txId) {
   const t=STATE.txs.find(x=>x.id===txId); if(!t) return;
-  document.getElementById('edit-id').value=txId;
-  document.getElementById('edit-desc').value=t.desc||'';
-  document.getElementById('edit-date').value=t.date||'';
-  document.getElementById('edit-val').value=t.val||'';
-  document.getElementById('edit-obs').value=t.obs||'';
-  const sel=document.getElementById('edit-sub');
-  sel.innerHTML=ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('');
-  const catSel=document.getElementById('edit-cat');
-  if(catSel){catSel.innerHTML='<option value="Fixa">Fixa</option><option value="Variáveis">Variável</option>';catSel.value=t.cat||getCat(t.sub);}
-  document.getElementById('edit-modal').classList.add('open');
+  document.getElementById('edittx-id').value=txId;
+  document.getElementById('edittx-desc').textContent=t.desc||'';
+  document.getElementById('edittx-date').textContent=t.date||'';
+  document.getElementById('edittx-val').textContent=fmt(parseFloat(t.val)||0);
+  
+  const sel=document.getElementById('edittx-sub');
+  if(sel)sel.innerHTML=ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('');
+  const catSel=document.getElementById('edittx-cat');
+  if(catSel)catSel.value=t.cat||getCat(t.sub);
+  document.getElementById('edittx-modal').classList.add('open');
 }
 
-function closeEditTx() { document.getElementById('edit-modal').classList.remove('open'); }
+function closeEditTx() { document.getElementById('edittx-modal').classList.remove('open'); }
 
 async function saveEditTx() {
-  const id=document.getElementById('edit-id').value;
-  const sub=document.getElementById('edit-sub').value;
-  const catEl=document.getElementById('edit-cat');
+  const id=document.getElementById('edittx-id').value;
+  const sub=document.getElementById('edittx-sub').value;
+  const catEl=document.getElementById('edittx-cat');
   const cat=catEl?catEl.value:getCat(sub);
   const upd={
-    desc:document.getElementById('edit-desc').value,
-    date:document.getElementById('edit-date').value,
-    val:document.getElementById('edit-val').value,
+    desc:document.getElementById('edittx-desc').textContent,
+    date:document.getElementById('edittx-date').textContent,
+    val:String(parseFloat(document.getElementById('edittx-val').textContent.replace(/[^0-9,.]/g,'').replace(',','.'))||0),
     sub,cat,
-    obs:document.getElementById('edit-obs').value,
+    obs:'',
   };
   STATE.txs=STATE.txs.map(t=>t.id===id?{...t,...upd}:t);
   cache.save(STATE.txs);
@@ -298,7 +298,7 @@ async function saveEditTx() {
 }
 
 async function deleteTx() {
-  const id=document.getElementById('edit-id').value;
+  const id=document.getElementById('edittx-id').value;
   if(!confirm('Excluir este lançamento?')) return;
   STATE.txs=STATE.txs.filter(t=>t.id!==id);
   cache.save(STATE.txs);
@@ -406,12 +406,12 @@ function closeSplit(){document.getElementById('split-modal').classList.remove('o
 
 // ── THRESHOLD ─────────────────────────────────────────
 function openThresholdModal() {
-  document.getElementById('threshold-input').value=threshold.get();
-  document.getElementById('threshold-modal').classList.add('open');
+  document.getElementById('review-threshold-input').value=threshold.get();
+  document.getElementById('review-threshold-modal').classList.add('open');
 }
-function closeThresholdModal(){document.getElementById('threshold-modal').classList.remove('open');}
+function closeThresholdModal(){document.getElementById('review-threshold-modal').classList.remove('open');}
 function setReviewThreshold(){
-  const v=parseFloat(document.getElementById('threshold-input').value)||1000;
+  const v=parseFloat(document.getElementById('review-threshold-input').value)||1000;
   threshold.set(v);
   closeThresholdModal();
   renderAjustes();
@@ -1311,12 +1311,14 @@ let pendingTxs=[];
 
 function renderImport() {
   const dz=document.getElementById('drop-zone');
-  if(dz) {
-    dz.addEventListener('click',()=>document.getElementById('file-input').click());
+  const fi=document.getElementById('file-input');
+  if(dz && !dz._bound) {
+    dz._bound=true;
+    dz.addEventListener('click',()=>fi.click());
     dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over');});
     dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
     dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');handleFiles(e.dataTransfer.files);});
-    document.getElementById('file-input').onchange=e=>handleFiles(e.target.files);
+    fi.onchange=e=>handleFiles(e.target.files);
   }
 }
 
@@ -1859,12 +1861,6 @@ function updatePinDots() {
 // ── BOOT ──────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',()=>{
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
-  const zone=document.getElementById('drop-zone'), fi=document.getElementById('file-input');
-  zone.addEventListener('click',()=>fi.click());
-  fi.addEventListener('change',e=>handleFiles(e.target.files));
-  zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('drag');});
-  zone.addEventListener('dragleave',()=>zone.classList.remove('drag'));
-  zone.addEventListener('drop',e=>{e.preventDefault();zone.classList.remove('drag');handleFiles(e.dataTransfer.files);});
   document.getElementById('detail-modal').addEventListener('click',e=>{
     if (e.target===document.getElementById('detail-modal')) closeDetail();
   });
