@@ -610,7 +610,8 @@ select {
 }
 .pin-grid {
   display:grid; grid-template-columns:repeat(3,1fr);
-  gap:12px; width:100%;
+  gap:14px; width:100%;
+  margin-top:8px;
 }
 .pin-key {
   aspect-ratio:1; border-radius:50%;
@@ -620,8 +621,12 @@ select {
   cursor:pointer; font-family:'Cormorant Garamond',serif;
   transition: background .12s;
   display:flex; align-items:center; justify-content:center;
+  min-width:64px; min-height:64px;
+  -webkit-appearance:none;
+  touch-action:manipulation;
+  user-select:none;
 }
-.pin-key:active { background:rgba(255,255,255,.28); }
+.pin-key:active { background:rgba(255,255,255,.35); }
 .pin-del { font-size:18px; font-family:inherit; }
 
 @keyframes shake {
@@ -736,3 +741,32 @@ select {
 .htop-bar  { height:100%; border-radius:3px; transition:width .4s; }
 .htop-val  { font-size:12px; font-feature-settings:'tnum'; flex-shrink:0; width:58px; text-align:right; }
 .htop-pct  { font-size:10px; color:var(--muted); width:28px; text-align:right; flex-shrink:0; }
+
+/* ── SPLIT MODAL ── */
+.split-part {
+  background: var(--s2); border-radius:10px;
+  padding:12px; margin-bottom:10px;
+  border:1px solid var(--border);
+}
+
+/* ── FLOATING ACTION BUTTON ── */
+.fab {
+  position: fixed;
+  bottom: calc(70px + var(--safe-bot));
+  right: 20px;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2C6FAC, #1A2F5A);
+  color: #fff;
+  font-size: 26px; line-height: 1;
+  border: none; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(28,47,90,.35);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 90;
+  touch-action: manipulation;
+  transition: transform .15s, box-shadow .15s;
+}
+.fab:active {
+  transform: scale(.92);
+  box-shadow: 0 2px 8px rgba(28,47,90,.25);
+}

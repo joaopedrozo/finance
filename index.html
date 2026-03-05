@@ -16,6 +16,25 @@
 <div id="toast" class="toast"></div>
 <div id="loading-bar" class="loading-bar" style="display:none"></div>
 
+<!-- SPLIT MODAL -->
+<div class="modal-overlay" id="split-modal">
+  <div class="modal">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="modal-title">Fracionar Lançamento</div>
+      <span class="modal-close" onclick="closeSplit()">×</span>
+    </div>
+    <div style="background:var(--s2);border-radius:10px;padding:12px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:600;color:var(--text)" id="split-original-desc"></div>
+      <div style="font-size:13px;color:var(--red);font-feature-settings:'tnum';margin-top:4px" id="split-original-val"></div>
+    </div>
+    <div id="split-remaining" style="font-size:12px;text-align:center;margin-bottom:12px;font-weight:600"></div>
+    <div id="split-parts"></div>
+    <button onclick="addSplitPart()" class="btn btn-ghost" style="margin:8px 0">+ Adicionar parte</button>
+    <button onclick="saveSplit()" class="btn">Confirmar fracionamento</button>
+    <button onclick="closeSplit()" class="btn btn-ghost">Cancelar</button>
+  </div>
+</div>
+
 <!-- THRESHOLD MODAL -->
 <div class="modal-overlay" id="review-threshold-modal">
   <div class="modal">
@@ -127,7 +146,6 @@
       <div class="header-sub">Gestão Financeira · 2026</div>
     </div>
     <div class="header-right">
-      <button class="btn-add" onclick="openManual()">+</button>
       <div id="sync-badge" class="sync-badge local">○ Local</div>
     </div>
   </div>
@@ -325,6 +343,9 @@
       <div class="nav-icon">↑</div><div>Importar</div>
     </div>
   </div>
+
+  <!-- FLOATING ADD BUTTON -->
+  <button class="fab" onclick="openManual()">＋</button>
 
 </div>
 <script src="app.js"></script>

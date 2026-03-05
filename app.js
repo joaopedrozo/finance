@@ -839,18 +839,18 @@ function openDetail(subName) {
     const dot=st==='ok'?'✓':st?'✎':'·';
     const dotC=st==='ok'?'#1E9E63':st?'#A67C2E':'#ccc';
     const catColor = getCat(t.sub)==='Fixa'?'var(--blue)':'var(--gold)';
-    return `<div class="detail-row" onclick="openEditTx('${t.id}')" style="cursor:pointer">
+    return `<div class="detail-row" style="cursor:pointer">
       <div style="color:${dotC};font-size:14px;width:16px;flex-shrink:0;margin-top:1px">${dot}</div>
-      <div style="flex:1;min-width:0">
+      <div style="flex:1;min-width:0" onclick="openEditTx('${t.id}')">
         <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
         <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date}
           <span style="color:${catColor};margin-left:4px">${getCat(t.sub)}</span>
           ${t.obs?' · '+t.obs:''}
         </div>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:8px">
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:8px">
         <div style="font-size:12px;color:var(--text);font-feature-settings:'tnum'">${fmt(parseFloat(t.val)||0)}</div>
-        <div style="font-size:10px;color:var(--muted)">✎</div>
+        <div onclick="openSplit('${t.id}')" style="font-size:10px;color:var(--blue);cursor:pointer;padding:2px 5px;border:1px solid var(--border);border-radius:4px;white-space:nowrap">÷</div>
       </div>
     </div>`;
   }).join('');
@@ -1126,6 +1126,110 @@ async function saveEditTx() {
 
 function closeEditTx() {
   document.getElementById('edittx-modal').classList.remove('open');
+}
+
+
+// ── FRACIONAMENTO ─────────────────────────────────────
+let splitTxId = null;
+let splitParts = [];
+
+function openSplit(txId) {
+  const t = STATE.txs.find(x => x.id === txId);
+  if (!t) return;
+  splitTxId = txId;
+  splitParts = [
+    { desc: t.desc, sub: t.sub, val: '' },
+    { desc: '', sub: t.sub, val: '' }
+  ];
+  document.getElementById('split-original-desc').textContent = t.desc;
+  document.getElementById('split-original-val').textContent  = fmt(parseFloat(t.val)||0);
+  document.getElementById('split-original-val').dataset.total = t.val;
+  renderSplitParts();
+  document.getElementById('split-modal').classList.add('open');
+}
+
+function renderSplitParts() {
+  const total = parseFloat(document.getElementById('split-original-val').dataset.total)||0;
+  const used  = splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
+  const remaining = total - used;
+  document.getElementById('split-remaining').textContent =
+    `Restante: ${fmt(remaining)} de ${fmt(total)}`;
+  document.getElementById('split-remaining').style.color =
+    Math.abs(remaining)<0.01 ? 'var(--green)' : remaining<0 ? 'var(--red)' : 'var(--muted)';
+
+  document.getElementById('split-parts').innerHTML = splitParts.map((p,i) => `
+    <div class="split-part">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted2)">Parte ${i+1}</div>
+        ${splitParts.length>2?`<span onclick="removeSplitPart(${i})" style="font-size:18px;color:var(--muted);cursor:pointer;line-height:1">×</span>`:''}
+      </div>
+      <div class="manual-field" style="margin-bottom:6px">
+        <label>Descrição</label>
+        <input type="text" value="${p.desc}" oninput="splitParts[${i}].desc=this.value" placeholder="Ex: Mercado">
+      </div>
+      <div style="display:flex;gap:8px">
+        <div class="manual-field" style="flex:1;margin-bottom:0">
+          <label>Categoria</label>
+          <select onchange="splitParts[${i}].sub=this.value">
+            ${ALL_SUBS.map(s=>`<option value="${s}" ${s===p.sub?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div class="manual-field" style="width:100px;margin-bottom:0">
+          <label>Valor (R$)</label>
+          <input type="number" value="${p.val}" step="0.01" placeholder="0,00"
+            oninput="splitParts[${i}].val=this.value;renderSplitParts()">
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function addSplitPart() {
+  const t = STATE.txs.find(x=>x.id===splitTxId);
+  splitParts.push({desc:'', sub: t?.sub||ALL_SUBS[0], val:''});
+  renderSplitParts();
+}
+
+function removeSplitPart(i) {
+  splitParts.splice(i,1);
+  renderSplitParts();
+}
+
+function saveSplit() {
+  const t = STATE.txs.find(x=>x.id===splitTxId);
+  if (!t) return closeSplit();
+  const total = parseFloat(t.val)||0;
+  const used  = splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
+  if (Math.abs(used-total)>0.02) {
+    showToast(`Soma das partes (${fmt(used)}) ≠ total (${fmt(total)})`,'warn');
+    return;
+  }
+  // Remove original, add parts
+  STATE.txs = STATE.txs.filter(x=>x.id!==splitTxId);
+  const newTxs = splitParts.map((p,i)=>({
+    ...t,
+    id: `${splitTxId}_s${i+1}`,
+    desc: p.desc||t.desc,
+    sub: p.sub,
+    cat: getCat(p.sub),
+    val: String(parseFloat(p.val)||0),
+    obs: (t.obs?t.obs+' · ':'')+`fração ${i+1}/${splitParts.length}`
+  }));
+  STATE.txs = [...STATE.txs, ...newTxs];
+  cache.save(STATE.txs);
+  if (isConfigured()) {
+    sheetsPost({action:'deleteTx', id:splitTxId}).catch(()=>{});
+    sheetsPost({action:'addTxs', txs:newTxs}).catch(()=>{});
+  }
+  reviewed.approve(splitTxId);
+  newTxs.forEach(tx=>reviewed.approve(tx.id));
+  closeSplit();
+  refreshAll();
+  showToast(`Dividido em ${splitParts.length} lançamentos ✓`,'ok');
+}
+
+function closeSplit() {
+  document.getElementById('split-modal').classList.remove('open');
+  splitTxId=null; splitParts=[];
 }
 
 // ── IMPORT ────────────────────────────────────────────
@@ -1824,19 +1928,18 @@ function pinKey(digit) {
   updatePinDots();
   if (pinBuffer.length === 4) {
     setTimeout(() => {
-      if (pinBuffer === PIN_HASH) {
+      if (pinBuffer.trim() === PIN_HASH.trim()) {
         unlockApp();
       } else {
         pinBuffer = '';
         updatePinDots();
         const err = document.getElementById('pin-error');
-        err.textContent = 'PIN incorreto';
-        setTimeout(() => { err.textContent = ''; }, 1500);
-        // Shake dots
+        err.textContent = 'PIN incorreto. Tente novamente.';
+        setTimeout(() => { err.textContent = ''; }, 2000);
         document.getElementById('pin-dots').classList.add('shake');
         setTimeout(() => document.getElementById('pin-dots').classList.remove('shake'), 400);
       }
-    }, 120);
+    }, 150);
   }
 }
 
@@ -1868,6 +1971,9 @@ document.addEventListener('DOMContentLoaded',()=>{
   });
   document.getElementById('review-threshold-modal').addEventListener('click',e=>{
     if (e.target===document.getElementById('review-threshold-modal')) closeThresholdModal();
+  });
+  document.getElementById('split-modal').addEventListener('click',e=>{
+    if (e.target===document.getElementById('split-modal')) closeSplit();
   });
   // PIN check
   if (checkPinSession()) {
