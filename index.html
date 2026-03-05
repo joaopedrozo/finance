@@ -1,88 +1,70 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="JCRP Family Finance">
-<meta name="theme-color" content="#FFFFFF">
-<link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
-<title>JCRP Family Finance</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>JCRP Family Finance</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1a1a2e">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="toast" class="toast"></div>
-<div id="loading-bar" class="loading-bar" style="display:none"></div>
 
-<!-- SPLIT MODAL -->
 <div class="modal-overlay" id="split-modal">
   <div class="modal">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-      <div class="modal-title">Fracionar Lançamento</div>
-      <span class="modal-close" onclick="closeSplit()">×</span>
+      <div class="modal-title">Fracionar Lançamento</div><span class="modal-close" onclick="closeSplit()">×</span>
     </div>
-    <div style="background:var(--s2);border-radius:10px;padding:12px;margin-bottom:14px">
+    <div style="background:var(--s2);border-radius:10px;padding:10px 12px;margin-bottom:14px">
       <div style="font-size:13px;font-weight:600;color:var(--text)" id="split-original-desc"></div>
-      <div style="font-size:13px;color:var(--red);font-feature-settings:'tnum';margin-top:4px" id="split-original-val"></div>
+      <div style="font-size:14px;color:var(--red);font-weight:600;margin-top:4px" id="split-original-val"></div>
     </div>
-    <div id="split-remaining" style="font-size:12px;text-align:center;margin-bottom:12px;font-weight:600"></div>
+    <div id="split-remaining" style="font-size:12px;color:var(--muted);margin-bottom:12px;text-align:center"></div>
     <div id="split-parts"></div>
-    <button onclick="addSplitPart()" class="btn btn-ghost" style="margin:8px 0">+ Adicionar parte</button>
-    <button onclick="saveSplit()" class="btn">Confirmar fracionamento</button>
+    <button onclick="addSplitPart()" class="btn btn-ghost" style="width:100%;margin-top:8px">+ Adicionar parte</button>
+    <button onclick="saveSplit()" class="btn" style="margin-top:8px">Salvar fracionamento</button>
     <button onclick="closeSplit()" class="btn btn-ghost">Cancelar</button>
   </div>
 </div>
 
-<!-- THRESHOLD MODAL -->
 <div class="modal-overlay" id="review-threshold-modal">
   <div class="modal">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div class="modal-title">Limite de Revisão</div>
-      <span class="modal-close" onclick="closeThresholdModal()">×</span>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="modal-title">Limite de Revisão</div><span class="modal-close" onclick="closeThresholdModal()">×</span>
     </div>
-    <div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">
-      Só lançamentos <b>acima deste valor</b> entram na fila de revisão.
-    </div>
-    <div class="manual-field"><label>Valor mínimo (R$)</label>
-      <input type="number" id="review-threshold-input" placeholder="1000" step="100">
-    </div>
-    <button class="btn" style="margin-top:8px" onclick="setReviewThreshold()">Salvar</button>
+    <div style="font-size:13px;color:var(--muted2);margin-bottom:16px;line-height:1.5">Lançamentos abaixo deste valor serão ignorados na fila de revisão.</div>
+    <div class="manual-field"><label>Valor mínimo (R$)</label><input type="number" id="review-threshold-input" placeholder="1000" step="100"></div>
+    <button class="btn" onclick="setReviewThreshold()">Confirmar</button>
     <button class="btn btn-ghost" onclick="closeThresholdModal()">Cancelar</button>
   </div>
 </div>
 
-<!-- MANUAL ENTRY MODAL -->
 <div class="modal-overlay" id="manual-modal">
   <div class="modal">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div class="modal-title">Lançamento Manual</div>
-      <span class="modal-close" onclick="closeManual()">×</span>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="modal-title">Novo Lançamento</div><span class="modal-close" onclick="closeManual()">×</span>
     </div>
     <div class="manual-field"><label>Data</label><input type="date" id="manual-date"></div>
     <div class="manual-field"><label>Descrição</label><input type="text" id="manual-desc" placeholder="Ex: Seguro saúde Jan"></div>
     <div class="manual-field"><label>Valor (R$)</label><input type="number" id="manual-val" placeholder="0,00" step="0.01"></div>
     <div class="manual-field"><label>Categoria</label><select id="manual-sub"></select></div>
-    <div class="manual-field"><label>Observação (opcional)</label><input type="text" id="manual-obs" placeholder="Ex: Ref. Jan 2026"></div>
-    <button class="btn" style="margin-top:8px" onclick="saveManual()">Salvar Lançamento</button>
+    <div class="manual-field"><label>Observação</label><input type="text" id="manual-obs" placeholder="Opcional"></div>
+    <button class="btn" onclick="saveManual()">Salvar</button>
     <button class="btn btn-ghost" onclick="closeManual()">Cancelar</button>
   </div>
 </div>
 
-<!-- EDIT TX MODAL -->
 <div class="modal-overlay" id="edittx-modal">
   <div class="modal">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">
-      <div class="modal-title">Editar Lançamento</div>
-      <span class="modal-close" onclick="closeEditTx()">×</span>
+      <div class="modal-title">Editar Lançamento</div><span class="modal-close" onclick="closeEditTx()">×</span>
     </div>
     <input type="hidden" id="edittx-id">
     <div style="background:var(--s2);border-radius:10px;padding:12px;margin-bottom:14px">
       <div style="font-size:13px;font-weight:600;color:var(--text)" id="edittx-desc"></div>
       <div style="display:flex;gap:16px;margin-top:6px">
         <div style="font-size:11px;color:var(--muted)" id="edittx-date"></div>
-        <div style="font-size:11px;color:var(--text);font-feature-settings:'tnum'" id="edittx-val"></div>
+        <div style="font-size:11px;color:var(--text)" id="edittx-val"></div>
       </div>
     </div>
     <div class="manual-field"><label>Subcategoria</label><select id="edittx-sub" onchange="onEditSubChange()"></select></div>
@@ -91,196 +73,165 @@
     </div>
     <button class="btn" style="margin-top:8px" onclick="saveEditTx()">Salvar</button>
     <button class="btn btn-ghost" onclick="closeEditTx()">Cancelar</button>
+    <button class="btn btn-ghost" style="color:var(--red)" onclick="deleteTx()">Excluir</button>
   </div>
 </div>
 
-<!-- DETAIL MODAL -->
 <div class="modal-overlay" id="detail-modal">
-  <div class="modal">
+  <div class="modal" style="max-height:85dvh;display:flex;flex-direction:column">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px">
       <div>
         <div class="modal-title" id="detail-title"></div>
-        <div style="font-size:11px;color:var(--muted)" id="detail-total"></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px" id="detail-total"></div>
       </div>
       <span class="modal-close" onclick="closeDetail()">×</span>
     </div>
-    <div id="detail-chart" style="margin:12px 0"></div>
-    <div id="detail-list"></div>
+    <div id="detail-chart" style="margin:8px 0"></div>
+    <div id="detail-list" style="overflow-y:auto;flex:1"></div>
   </div>
 </div>
 
-    <div class="pin-sub">JCRP Family Finance</div>
-    <div class="pin-dots" id="pin-dots">
-      <div class="pin-dot" id="pd0"></div><div class="pin-dot" id="pd1"></div>
-      <div class="pin-dot" id="pd2"></div><div class="pin-dot" id="pd3"></div>
-    </div>
-    <div id="pin-error" class="pin-error"></div>
-    <div class="pin-grid">
-      <button class="pin-key" onclick="pinKey('1')">1</button>
-      <button class="pin-key" onclick="pinKey('2')">2</button>
-      <button class="pin-key" onclick="pinKey('3')">3</button>
-      <button class="pin-key" onclick="pinKey('4')">4</button>
-      <button class="pin-key" onclick="pinKey('5')">5</button>
-      <button class="pin-key" onclick="pinKey('6')">6</button>
-      <button class="pin-key" onclick="pinKey('7')">7</button>
-      <button class="pin-key" onclick="pinKey('8')">8</button>
-      <button class="pin-key" onclick="pinKey('9')">9</button>
-      <div></div>
-      <button class="pin-key" onclick="pinKey('0')">0</button>
-      <button class="pin-key pin-del" onclick="pinDel()">⌫</button>
-    </div>
-  </div>
-</div>
+<div id="loading-bar" class="loading-bar" style="display:none"></div>
 
-<div id="app">
-  <div class="statusbar"></div>
-
-  <!-- HEADER -->
+<div class="app-wrap">
   <div class="header">
-    <div>
+    <div class="header-left">
       <div class="header-title">JCRP</div>
       <div class="header-sub">Family Finance</div>
     </div>
     <div class="header-right">
+      <button class="header-search-btn" onclick="openSearch()">🔍</button>
       <div id="sync-badge" class="sync-badge local">○ Local</div>
     </div>
   </div>
 
   <div class="scroll-area">
 
-    <!-- INÍCIO -->
     <div id="screen-home" class="screen active">
       <div id="home-dashboard"></div>
     </div>
 
-    <!-- DESPESAS -->
     <div id="screen-despesas" class="screen">
-      <div class="month-pills" id="month-pills"></div>
-      <div class="card" style="margin-bottom:12px">
+      <div class="month-pills-wrap"><div class="month-pills" id="month-pills"></div></div>
+      <div class="card">
         <div class="card-header">
-          <div class="card-title">Total do Mês</div>
-          <div id="desp-kpi-total" style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:400;color:var(--red)"></div>
-        </div>
-        <div class="card-body">
-          <div style="display:flex;gap:24px">
-            <div><div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Fixas</div>
-              <div id="desp-kpi-fixa" style="font-size:12px;color:var(--blue);cursor:pointer" onclick="openDetailCat('fixa')"></div></div>
-            <div><div style="font-size:9px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:3px">Variáveis</div>
-              <div id="desp-kpi-var" style="font-size:12px;color:var(--gold);cursor:pointer" onclick="openDetailCat('variavel')"></div></div>
+          <div>
+            <div class="card-title">Total do mês</div>
+            <div id="desp-kpi-total" style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:400;color:var(--red)"></div>
+          </div>
+          <div style="text-align:right">
+            <div style="display:flex;gap:12px">
+              <div><div style="font-size:9px;color:var(--muted)">Fixa</div><div id="desp-kpi-fixa" style="font-size:12px;color:var(--blue);cursor:pointer" onclick="openDetailCat('fixa')"></div></div>
+              <div><div style="font-size:9px;color:var(--muted)">Variável</div><div id="desp-kpi-var" style="font-size:12px;color:var(--gold);cursor:pointer" onclick="openDetailCat('variavel')"></div></div>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-header"><div class="card-title">Categorias</div><div style="font-size:10px;color:var(--muted)">Toque para expandir</div></div>
+        <div style="display:flex;gap:6px;padding:0 0 10px">
+          <button id="dsort-val" class="sort-pill active" onclick="setDespSort('valor_desc')">Valor ↓</button>
+          <button id="dsort-alpha" class="sort-pill" onclick="setDespSort('alpha')">A–Z</button>
+          <button id="dsort-bud" class="sort-pill" onclick="setDespSort('budget_pct')">Desvio</button>
+        </div>
         <div class="card-body" id="desp-table"></div>
       </div>
       <div style="height:8px"></div>
     </div>
 
-    <!-- COMPARATIVO -->
     <div id="screen-comparativo" class="screen">
-      <div class="section-label">Orçado × Realizado</div>
-      <div style="display:flex;gap:8px;padding:0 16px 10px">
-        <button id="cmp-toggle-mensal" class="pill active" onclick="setCmpView('mensal')">Por mês</button>
-        <button id="cmp-toggle-anual"  class="pill"        onclick="setCmpView('anual')">Resumo anual</button>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Evolução Mensal</div></div>
+        <div id="cmp-barchart"></div>
       </div>
-      <div class="card" style="overflow:hidden;margin-bottom:12px">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Por Categoria</div>
+          <div style="display:flex;gap:6px">
+            <button id="cmp-toggle-mensal" class="sort-pill active" onclick="setCmpView('mensal')">Por Mês</button>
+            <button id="cmp-toggle-anual"  class="sort-pill" onclick="setCmpView('anual')">Anual</button>
+          </div>
+        </div>
         <div id="cmp-rows"></div>
       </div>
-      <div class="section-label">Evolução Mensal</div>
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-body" style="padding-top:16px" id="cmp-barchart"></div>
-      </div>
-      <div class="section-label">Fixo vs Variável — Acumulado</div>
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-body"><div id="cmp-donut"></div></div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Fixa vs Variável</div></div>
+        <div id="cmp-donut" style="display:flex;align-items:center;gap:12px;padding:0 0 4px"></div>
       </div>
       <div style="height:8px"></div>
     </div>
 
-    <!-- PATRIMÔNIO -->
     <div id="screen-patrimonio" class="screen">
-      <div class="pat-total-block">
-        <div class="pat-big" id="pat-total-val">—</div>
-        <div class="pat-sub">Posição Patrimonial · 2026</div>
-      </div>
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-header"><div class="card-title">Alocação</div></div>
-        <div class="card-body"><div id="pat-donut"></div></div>
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Patrimônio Total</div>
+            <div id="pat-total-val" style="font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:400;color:var(--text);margin-top:4px"></div>
+          </div>
+        </div>
+        <div id="pat-donut" style="display:flex;align-items:center;gap:12px;padding:4px 0"></div>
       </div>
       <div class="card">
-        <div class="pat-group-title" style="border-top:none;margin-top:0">Ativos Líquidos</div>
+        <div class="card-header"><div class="card-title">Liquidez &amp; Investimentos</div></div>
         <div id="pat-items-liq"></div>
-        <div class="pat-group-title">Ativos Imobilizados</div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">Imóveis</div></div>
         <div id="pat-items-imob"></div>
       </div>
       <div style="height:8px"></div>
     </div>
 
-    <!-- REVISAR -->
-    <div id="screen-revisar" class="screen">
-      <div class="section-label">Revisar Lançamentos</div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:0 16px 10px">
-        <div style="font-size:12px;color:var(--muted)">Acima de <b id="review-threshold-val">R$ 1.000</b></div>
-        <button onclick="openThresholdModal()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:4px 8px">Alterar limite</button>
+    <div id="screen-ajustes" class="screen">
+      <div style="display:flex;gap:8px;padding:16px 16px 0">
+        <button class="ajuste-tab active" id="atab-revisar" onclick="setAjusteTab('revisar')">Revisar</button>
+        <button class="ajuste-tab" id="atab-regras"  onclick="setAjusteTab('regras')">Regras</button>
+        <button class="ajuste-tab" id="atab-import"  onclick="setAjusteTab('import')">Importar</button>
       </div>
-      <div id="review-skipped" style="margin:0 16px 8px;font-size:11px;color:var(--muted);line-height:1.4"></div>
-      <div id="review-card-wrap">
-        <div style="padding:0 16px 8px;display:flex;align-items:center;gap:12px">
-          <div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
-            <div id="review-prog-fill" style="height:100%;background:var(--blue);border-radius:2px;transition:width .3s"></div>
+      <div id="ajuste-revisar">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px 8px">
+          <div style="font-size:12px;color:var(--muted)">Acima de <b id="review-threshold-val">R$ 1.000</b></div>
+          <button onclick="openThresholdModal()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:4px 8px">Alterar</button>
+        </div>
+        <div id="review-skipped" style="margin:0 16px 8px;font-size:11px;color:var(--muted)"></div>
+        <div id="review-card-wrap">
+          <div style="padding:0 16px 8px;display:flex;align-items:center;gap:12px">
+            <div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+              <div id="review-prog-fill" style="height:100%;background:var(--blue);border-radius:2px;transition:width .3s"></div>
+            </div>
+            <div id="review-progress" style="font-size:11px;color:var(--muted);white-space:nowrap"></div>
           </div>
-          <div id="review-progress" style="font-size:11px;color:var(--muted);white-space:nowrap"></div>
+          <div class="review-card" id="review-card"></div>
+          <div style="display:flex;gap:10px;padding:0 16px 8px">
+            <button class="btn btn-ghost" style="flex:1;margin:0;padding:12px" onclick="rejectCard()">✎ Corrigir</button>
+            <button class="btn" style="flex:2;margin:0;padding:12px;background:var(--green);border:none" onclick="approveCard()">✓ Aprovado</button>
+          </div>
+          <div style="text-align:center;padding:4px 0 16px">
+            <span onclick="skipCard()" style="font-size:11px;color:var(--muted);cursor:pointer">Pular →</span>
+          </div>
         </div>
-        <div class="review-card" id="review-card"></div>
-
-        <div style="display:flex;gap:10px;padding:0 16px 8px">
-          <button class="btn btn-ghost" style="flex:1;margin:0;padding:12px" onclick="rejectCard()">✎ Corrigir</button>
-          <button class="btn" style="flex:2;margin:0;padding:12px;background:var(--green);border:none" onclick="approveCard()">✓ Aprovado</button>
-        </div>
-        <div style="text-align:center;padding:4px 0 16px">
-          <span onclick="skipCard()" style="font-size:11px;color:var(--muted);cursor:pointer">Pular →</span>
-        </div>
-        <div style="text-align:center;padding:0 16px 12px;font-size:11px;color:var(--muted)">
-          Deslize → aprovado · ← corrigir
+        <div id="review-done" style="display:none;flex-direction:column;align-items:center;padding:48px 24px;text-align:center">
+          <div style="font-size:40px;margin-bottom:12px">✓</div>
+          <div style="font-size:16px;color:var(--text)">Tudo revisado!</div>
         </div>
       </div>
-      <div id="review-done" style="display:none;flex-direction:column;align-items:center;padding:48px 24px;text-align:center">
-        <div style="font-size:48px;margin-bottom:16px">✓</div>
-        <div style="font-size:18px;font-family:'Cormorant Garamond',serif;color:var(--text);margin-bottom:8px">Tudo revisado!</div>
-        <div style="font-size:12px;color:var(--muted)">Todos os lançamentos foram aprovados ou corrigidos</div>
-        <button class="btn" style="margin-top:24px" onclick="showScreen('home')">Voltar ao início</button>
+      <div id="ajuste-regras" style="display:none"><div id="rules-content"></div></div>
+      <div id="ajuste-import" style="display:none">
+        <div style="padding:16px">
+          <div class="import-zone" id="drop-zone">
+            <div class="import-icon">📂</div>
+            <div class="import-title">Arraste ou toque para importar</div>
+            <div class="import-sub">Aceita: <b>Itaú CSV</b> · <b>Unicred CSV</b> · <b>Fatura CSV</b></div>
+          </div>
+          <input type="file" id="file-input" accept=".csv,.xls,.xlsx" multiple>
+          <div style="padding:8px 0;font-size:12px;color:var(--muted)" id="import-count"></div>
+          <div class="import-log" id="import-log"></div>
+          <button class="btn" id="btn-confirm" disabled onclick="confirmImport()">Confirmar Importação</button>
+        </div>
       </div>
-      <div style="height:8px"></div>
+      <div style="height:16px"></div>
     </div>
 
-    <!-- REGRAS -->
-    <div id="screen-regras" class="screen">
-      <div class="section-label">Regras de Categorização</div>
-      <div id="rules-content"></div>
-      <div style="height:8px"></div>
-    </div>
+  </div>
 
-    <!-- IMPORTAR -->
-    <div id="screen-import" class="screen">
-      <div class="section-label">Importar Extrato</div>
-      <div class="import-zone" id="drop-zone">
-        <div class="import-icon">📂</div>
-        <div class="import-title">Arraste ou toque para importar</div>
-        <div class="import-sub">Aceita: <b>Itaú CSV</b> · <b>Unicred CSV</b> · <b>Fatura CSV</b></div>
-      </div>
-      <input type="file" id="file-input" accept=".csv,.xls,.xlsx" multiple>
-      <div style="padding:0 16px 8px;font-size:12px;color:var(--muted)" id="import-count"></div>
-      <div class="import-log" id="import-log"></div>
-      <button class="btn" id="btn-confirm" disabled onclick="confirmImport()">Confirmar Importação</button>
-      <button class="btn btn-ghost" onclick="showScreen('home')">Cancelar</button>
-      <div style="height:8px"></div>
-    </div>
-
-  </div><!-- scroll-area -->
-
-  <!-- BOTTOM NAV -->
-  <div class="bottom-nav">
+  <nav class="bottom-nav">
     <div class="nav-item active" id="nav-home" onclick="showScreen('home')">
       <div class="nav-icon">◈</div><div>Geral</div>
     </div>
@@ -297,16 +248,13 @@
       <div class="nav-icon">⚙</div><div>Ajustes</div>
       <div id="review-badge" style="display:none;position:absolute;top:6px;right:12px;width:16px;height:16px;background:#D63E50;border-radius:50%;font-size:9px;color:#fff;align-items:center;justify-content:center;font-weight:700"></div>
     </div>
-  </div>
+  </nav>
 
-  <!-- SEARCH MODAL -->
   <div class="modal-overlay" id="search-modal">
     <div class="modal" style="max-height:85dvh;display:flex;flex-direction:column">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-        <input id="search-input" type="text" placeholder="Buscar descrição, categoria, valor..."
-          oninput="runSearch()"
-          style="flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:10px;
-                 font-size:14px;background:var(--s2);color:var(--text);font-family:inherit">
+        <input id="search-input" type="text" placeholder="Buscar descrição, categoria, valor..." oninput="runSearch()"
+          style="flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:var(--s2);color:var(--text);font-family:inherit">
         <span class="modal-close" onclick="closeSearch()">×</span>
       </div>
       <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap" id="search-filters">
@@ -319,10 +267,9 @@
     </div>
   </div>
 
-  <!-- FLOATING ADD BUTTON -->
   <button class="fab" onclick="openManual()">＋</button>
-
 </div>
+
 <script src="app.js"></script>
 </body>
 </html>
