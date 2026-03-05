@@ -314,8 +314,7 @@ function refreshAll() {
   if (active==='despesas')    renderDespesas();
   if (active==='comparativo') renderComparativo();
   if (active==='patrimonio')  renderPatrimonio();
-  if (active==='revisar')     renderRevisar();
-  if (active==='regras')      renderRules();
+  if (active==='ajustes')     renderAjustes();
 }
 
 // ── HOME ──────────────────────────────────────────────
@@ -354,7 +353,7 @@ function renderHome() {
 
   // Alertas compactos
   const alerts = [];
-  if (pending > 0) alerts.push(`${pending} lançamento${pending>1?'s':''} acima de ${fmtK(minVal)} para revisar`);
+  // Badge on ajustes tab handles pending — no need to duplicate in alerts
   top5.filter(([n,v])=>BUDGET[n]&&v>BUDGET[n]*nMonths).forEach(([n])=>alerts.push(`${n} acima do orçado`));
 
   document.getElementById('home-dashboard').innerHTML = `
@@ -603,15 +602,522 @@ function runSearch() {
   }).join('') + (results.length>100?`<div style="padding:12px;text-align:center;font-size:11px;color:var(--muted)">Mostrando 100 de ${results.length} resultados — refine a busca</div>`:'');
 }
 
+// ── DESPESAS ──────────────────────────────────────────
+let activeMonth='01';
+let despSort='valor_desc';
+
+function openDetailCat(tipo) {
+  const txs=STATE.txs, m=parseInt(activeMonth);
+  const filtered=txs.filter(t=>{
+    if(!t.date||!t.date.startsWith(`2026-${activeMonth}`)) return false;
+    return tipo==='fixa'?getCat(t.sub)==='Fixa':getCat(t.sub)!=='Fixa';
+  });
+  const total=filtered.reduce((a,t)=>a+(parseFloat(t.val)||0),0);
+  document.getElementById('detail-title').textContent=tipo==='fixa'?'Despesas Fixas':'Despesas Variáveis';
+  document.getElementById('detail-total').textContent=fmt(total)+' · '+filtered.length+' lançamentos';
+  document.getElementById('detail-chart').innerHTML='';
+  const rev=reviewed.load();
+  document.getElementById('detail-list').innerHTML=filtered.sort((a,b)=>b.val-a.val).map(t=>{
+    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'#1A8C5B':st?'#A67C2E':'#ccc';
+    return `<div class="detail-row" onclick="openEditTx('${t.id}')" style="cursor:pointer">
+      <div style="color:${dotC};font-size:14px;width:16px;flex-shrink:0">${dot}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date} · ${t.sub}</div>
+      </div>
+      <div style="font-size:12px;font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('detail-modal').classList.add('open');
+}
+
+function renderDespesas() {
+  const txs=STATE.txs, m=parseInt(activeMonth), ag=aggregate(txs,m), total=ag.total;
+  document.getElementById('month-pills').innerHTML=
+    ['01','02','03','04','05','06','07','08','09','10','11','12']
+    .map(mo=>`<div class="pill ${mo===activeMonth?'active':''}" onclick="setMonth('${mo}')">${MNAMES[parseInt(mo)-1]}</div>`).join('');
+  document.getElementById('desp-kpi-total').textContent=fmt(total);
+  const fixa=ag.fixaM[activeMonth]||0, vari=ag.varM[activeMonth]||0;
+  document.getElementById('desp-kpi-fixa').textContent=fmt(fixa);
+  document.getElementById('desp-kpi-var').textContent=fmt(vari);
+
+  const entries=Object.entries(ag.bySub).filter(([k])=>k!=='NÃO CATEGORIZADO');
+  let sorted;
+  if (despSort==='valor_desc') sorted=[...entries].sort((a,b)=>b[1]-a[1]);
+  else if (despSort==='valor_asc') sorted=[...entries].sort((a,b)=>a[1]-b[1]);
+  else if (despSort==='alpha') sorted=[...entries].sort((a,b)=>a[0].localeCompare(b[0]));
+  else if (despSort==='budget_pct') sorted=[...entries].sort((a,b)=>{
+    const pa=BUDGET[a[0]]?a[1]/BUDGET[a[0]]:0, pb=BUDGET[b[0]]?b[1]/BUDGET[b[0]]:0;
+    return pb-pa;
+  });
+  else sorted=[...entries].sort((a,b)=>b[1]-a[1]);
+
+  document.getElementById('desp-table').innerHTML=sorted.length
+    ? sorted.map(([name,val],i)=>{
+      const bud=BUDGET[name], over=bud&&val>bud;
+      const pctBud=bud?(val/bud*100):null;
+      const pctTotal=(val/total*100);
+      const barW=bud?Math.min(pctBud,100):0;
+      const overExtra=bud&&val>bud?Math.min(((val-bud)/bud*100),100):0;
+      const monthTxsForCat=STATE.txs.filter(t=>t.date&&t.date.startsWith(`2026-${activeMonth}`)&&t.sub===name);
+      return `<div class="cat-row-wrap">
+        <div class="cat-row-header" onclick="toggleCatRow('catrow-${i}','${name}')">
+          <div class="crh-top">
+            <div class="crh-name">${name}</div>
+            <div class="crh-right">
+              <div class="crh-val ${over?'crh-over':''}">${fmt(val)}</div>
+              <div id="arrow-${i}" class="crh-arrow">▼</div>
+            </div>
+          </div>
+          <div class="crh-meta">
+            <div class="crh-meta-left">
+              ${bud
+                ?`<span class="crh-bud-label">Orç: ${fmt(bud)}</span>
+                  <span class="crh-bud-sep">·</span>
+                  <span class="crh-bud-pct ${over?'crh-over':pctBud>80?'crh-warn':''}">${pctBud.toFixed(0)}% usado</span>`
+                :`<span class="crh-bud-label" style="color:var(--muted)">Sem orçamento</span>`}
+            </div>
+            <div class="crh-rel">${pctTotal.toFixed(0)}% do mês · ${monthTxsForCat.length} lanç.</div>
+          </div>
+          <div class="crh-bar-track">
+            <div class="crh-bar-fill ${over?'crh-bar-over':''}" style="width:${barW.toFixed(1)}%"></div>
+            ${over?`<div class="crh-bar-extra" style="width:${overExtra.toFixed(1)}%"></div>`:''}
+          </div>
+        </div>
+        <div id="catrow-${i}" class="cat-row-detail" style="display:none">
+          ${monthTxsForCat.sort((a,b)=>parseFloat(b.val)-parseFloat(a.val)).map(t=>`
+            <div class="cat-sub-row" onclick="openEditTx('${t.id}')">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
+                <div style="font-size:10px;color:var(--muted);margin-top:1px">${t.date}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                <div style="font-size:11px;font-weight:600;color:var(--text);font-feature-settings:'tnum'">${fmt(parseFloat(t.val)||0)}</div>
+                <div style="font-size:9px;color:var(--blue);border:1px solid var(--border);border-radius:3px;padding:1px 4px" onclick="event.stopPropagation();openSplit('${t.id}')">÷</div>
+              </div>
+            </div>`).join('')}
+          <div style="padding:8px 12px">
+            <button onclick="openDetail('${name}')" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0">Ver todos →</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('')
+    : '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">Sem dados para este mês</div>';
+}
+
+function setMonth(m) { activeMonth=m; renderDespesas(); }
+
+function toggleCatRow(id,name) {
+  const el=document.getElementById(id);
+  const idx=id.replace('catrow-','');
+  const arrow=document.getElementById('arrow-'+idx);
+  if(!el) return;
+  const open=el.style.display==='block';
+  el.style.display=open?'none':'block';
+  if(arrow) arrow.style.transform=open?'':'rotate(180deg)';
+}
+
+function setDespSort(col) {
+  if(col==='valor_desc'&&despSort==='valor_desc') col='valor_asc';
+  else if(col==='valor_asc'&&despSort==='valor_asc') col='valor_desc';
+  despSort=col;
+  ['val','alpha','bud'].forEach(k=>{const el=document.getElementById('dsort-'+k);if(el)el.classList.remove('active');});
+  if(col.startsWith('valor')){const el=document.getElementById('dsort-val');if(el){el.classList.add('active');el.textContent=col==='valor_desc'?'Valor ↓':'Valor ↑';}}
+  if(col==='alpha'){const el=document.getElementById('dsort-alpha');if(el)el.classList.add('active');}
+  if(col==='budget_pct'){const el=document.getElementById('dsort-bud');if(el)el.classList.add('active');}
+  renderDespesas();
+}
+
+// ── COMPARATIVO ────────────────────────────────────────
+let cmpView='mensal';
+let cmpMensalSort='total_desc';
+let cmpAnualSort='spent_desc';
+
+function renderComparativo() {
+  const txs=STATE.txs;
+  if(cmpView==='mensal') renderCmpMensal(txs);
+  else renderCmpAnual(txs);
+  const byM=byMonthTotals(txs);
+  const budMensal=Object.values(BUDGET).reduce((a,b)=>a+b,0);
+  document.getElementById('cmp-barchart').innerHTML=monthBarChart(byM,budMensal);
+  const acum=txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  const fixa=txs.filter(t=>getCat(t.sub)==='Fixa').reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  const vari=acum-fixa;
+  const segs=[{label:'Fixas',v:fixa,c:'var(--blue)'},{label:'Variáveis',v:vari,c:'var(--gold)'}];
+  document.getElementById('cmp-donut').innerHTML=segs[0].v>0
+    ?donutSVG(segs,50,50,38,14)+`<div class="donut-legend-v">${segs.map(s=>`
+      <div class="donut-leg-item"><div class="donut-leg-dot" style="background:${s.c}"></div>
+      <div class="donut-leg-name">${s.label}</div><div class="donut-leg-val">${fmtK(s.v)}</div>
+      <div class="donut-leg-pct">${pctOf(s.v,acum)}</div></div>`).join('')}</div>`:'';
+}
+
+function setCmpView(v) {
+  cmpView=v;
+  document.getElementById('cmp-toggle-mensal').classList.toggle('active',v==='mensal');
+  document.getElementById('cmp-toggle-anual').classList.toggle('active',v==='anual');
+  renderComparativo();
+}
+
+function renderCmpMensal(txs) {
+  const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
+  const allSubs={};
+  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO'){
+    if(!allSubs[t.sub])allSubs[t.sub]={};
+    const m=t.date?t.date.slice(5,7):'00';
+    allSubs[t.sub][m]=(allSubs[t.sub][m]||0)+(parseFloat(t.val)||0);
+  }});
+  const activeMths=months.filter(m=>Object.values(allSubs).some(mv=>mv[m]));
+  let entries=Object.entries(allSubs);
+  const getTotal=([,mv])=>Object.values(mv).reduce((x,y)=>x+y,0);
+  const [sc,sd]=cmpMensalSort.split('_'); const desc=sd==='desc';
+  if(sc==='alpha') entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
+  else if(sc==='budget') entries.sort((a,b)=>desc?(BUDGET[b[0]]||0)-(BUDGET[a[0]]||0):(BUDGET[a[0]]||0)-(BUDGET[b[0]]||0));
+  else if(sc==='total') entries.sort((a,b)=>desc?getTotal(b)-getTotal(a):getTotal(a)-getTotal(b));
+  else if(sc==='pct') entries.sort((a,b)=>{
+    const pa=BUDGET[a[0]]?getTotal(a)/BUDGET[a[0]]:0,pb=BUDGET[b[0]]?getTotal(b)/BUDGET[b[0]]:0;
+    return desc?pb-pa:pa-pb;
+  });
+  else {
+    const mo=sc.replace('month','');
+    entries.sort((a,b)=>desc?(b[1][mo]||0)-(a[1][mo]||0):(a[1][mo]||0)-(b[1][mo]||0));
+  }
+  const si=col=>{const[c2,d2]=cmpMensalSort.split('_');if(c2!==col)return'<span style="color:var(--muted);font-size:8px">↕</span>';return d2==='desc'?'↓':'↑';};
+  const CAT_W=108,BUD_W=54,M_W=54,TOT_W=60,PCT_W=44;
+  let html=`<div class="cmp-scroll-wrap"><table class="bud-table">
+    <colgroup>
+      <col style="width:${CAT_W}px;min-width:${CAT_W}px">
+      <col style="width:${BUD_W}px;min-width:${BUD_W}px">
+      ${activeMths.map(()=>`<col style="width:${M_W}px;min-width:${M_W}px">`).join('')}
+      <col style="width:${TOT_W}px;min-width:${TOT_W}px">
+      <col style="width:${PCT_W}px;min-width:${PCT_W}px">
+    </colgroup>
+    <thead><tr>
+      <th class="bud-cat th-sort" onclick="setCmpMensalSort('alpha')">Cat ${si('alpha')}</th>
+      <th class="bud-bud th-sort" onclick="setCmpMensalSort('budget')">Orç ${si('budget')}</th>
+      ${activeMths.map(m=>`<th class="bud-m th-sort" onclick="setCmpMensalSort('month${m}')">${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][parseInt(m)-1]} ${si('month'+m)}</th>`).join('')}
+      <th class="bud-tot th-sort" onclick="setCmpMensalSort('total')">Total ${si('total')}</th>
+      <th class="bud-m th-sort" onclick="setCmpMensalSort('pct')">% ${si('pct')}</th>
+    </tr></thead><tbody>`;
+  entries.forEach(([sub,byMonth])=>{
+    const bud=BUDGET[sub]||0,total=Object.values(byMonth).reduce((a,b)=>a+b,0);
+    const pct=bud?(total/bud*100).toFixed(0):null,over=bud&&total>bud;
+    html+=`<tr onclick="openDetail('${sub}')">
+      <td class="bud-cat">${sub}</td>
+      <td class="bud-bud" style="text-align:right;color:var(--muted)">${bud?fmtK(bud):'—'}</td>
+      ${activeMths.map(m=>{const v=byMonth[m]||0,ov=bud&&v>bud;return`<td class="bud-m ${ov?'cell-over':v>0?'cell-ok':'cell-empty'}" style="text-align:right">${v>0?fmtK(v):'—'}</td>`;}).join('')}
+      <td class="bud-tot" style="text-align:right;color:${over?'var(--red)':'var(--text)'}">${fmtK(total)}</td>
+      <td class="bud-m" style="text-align:right">${pct?`<span style="font-size:10px;font-weight:600;color:${over?'var(--red)':parseInt(pct)>80?'#C07010':'var(--green)'}">${pct}%</span>`:'—'}</td>
+    </tr>`;
+  });
+  html+=`</tbody></table></div>`;
+  document.getElementById('cmp-rows').innerHTML=html;
+}
+
+function setCmpMensalSort(col) {
+  const[sc]=cmpMensalSort.split('_');
+  cmpMensalSort=sc===col?cmpMensalSort.endsWith('_desc')?col+'_asc':col+'_desc':col+'_desc';
+  renderCmpMensal(STATE.txs);
+}
+
+function renderCmpAnual(txs) {
+  const nMonths=[...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].length||1;
+  const allSubs={};
+  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
+  let entries=Object.entries(allSubs);
+  const[sc,sd]=cmpAnualSort.split('_');const desc=sd==='desc';
+  if(sc==='alpha') entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
+  else if(sc==='budget') entries.sort((a,b)=>desc?((BUDGET[b[0]]||0)*12)-((BUDGET[a[0]]||0)*12):((BUDGET[a[0]]||0)*12)-((BUDGET[b[0]]||0)*12));
+  else if(sc==='spent') entries.sort((a,b)=>desc?b[1]-a[1]:a[1]-b[1]);
+  else if(sc==='saldo') entries.sort((a,b)=>{const sa=(BUDGET[a[0]]||0)*12-a[1],sb=(BUDGET[b[0]]||0)*12-b[1];return desc?sa-sb:sb-sa;});
+  else if(sc==='pct') entries.sort((a,b)=>{
+    const pa=BUDGET[a[0]]?a[1]/((BUDGET[a[0]]||0)*12):0,pb=BUDGET[b[0]]?b[1]/((BUDGET[b[0]]||0)*12):0;
+    return desc?pb-pa:pa-pb;
+  });
+  const si=col=>{const[c2,d2]=cmpAnualSort.split('_');if(c2!==col)return'<span style="color:var(--muted);font-size:8px">↕</span>';return d2==='desc'?'↓':'↑';};
+  let html=`<table class="bud-table" style="width:100%">
+    <thead><tr>
+      <th class="bud-cat th-sort" onclick="setCmpAnualSort('alpha')">Cat ${si('alpha')}</th>
+      <th class="bud-bud th-sort" onclick="setCmpAnualSort('budget')" style="text-align:right">Anual ${si('budget')}</th>
+      <th class="bud-bud th-sort" onclick="setCmpAnualSort('spent')"  style="text-align:right">Gasto ${si('spent')}</th>
+      <th class="bud-bud th-sort" onclick="setCmpAnualSort('saldo')"  style="text-align:right">Saldo ${si('saldo')}</th>
+      <th class="bud-m  th-sort"  onclick="setCmpAnualSort('pct')"    style="text-align:right">% ${si('pct')}</th>
+    </tr></thead><tbody>`;
+  entries.forEach(([sub,spent])=>{
+    const budA=(BUDGET[sub]||0)*12,saldo=budA-spent;
+    const pct=budA?Math.min((spent/budA*100),999):null,over=budA&&spent>budA;
+    html+=`<tr onclick="openDetail('${sub}')">
+      <td class="bud-cat">${sub}</td>
+      <td class="bud-bud" style="text-align:right;color:var(--muted)">${budA?fmtK(budA):'—'}</td>
+      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--text)'};font-weight:600">${fmtK(spent)}</td>
+      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--green)'}">${budA?(over?'−':'+')+fmtK(Math.abs(saldo)):'—'}</td>
+      <td class="bud-m"   style="text-align:right">${pct!==null?`<span style="font-size:10px;font-weight:600;color:${over?'var(--red)':pct>80?'#C07010':'var(--green)'}">${pct.toFixed(0)}%</span>`:'—'}</td>
+    </tr>`;
+  });
+  html+=`</tbody></table>`;
+  document.getElementById('cmp-rows').innerHTML=html;
+}
+
+function setCmpAnualSort(col) {
+  const[sc]=cmpAnualSort.split('_');
+  cmpAnualSort=sc===col?cmpAnualSort.endsWith('_desc')?col+'_asc':col+'_desc':col+'_desc';
+  renderCmpAnual(STATE.txs);
+}
+
+// ── PATRIMÔNIO ────────────────────────────────────────
+async function renderPatrimonio() {
+  document.getElementById('pat-total-val').textContent='R$ 27,4M';
+  const segs=[
+    {label:'Imóveis',v:17900000,c:'#2C6FAC'},
+    {label:'Investimentos',v:7500000,c:'#1A8C5B'},
+    {label:'Liquidez',v:1979902,c:'#C07010'},
+  ];
+  const total=segs.reduce((s,x)=>s+x.v,0);
+  document.getElementById('pat-donut').innerHTML=donutSVG(segs,50,50,38,14)+
+    `<div class="donut-legend-v">${segs.map(s=>`
+      <div class="donut-leg-item"><div class="donut-leg-dot" style="background:${s.c}"></div>
+      <div class="donut-leg-name">${s.label}</div><div class="donut-leg-val">${fmtK(s.v)}</div>
+      <div class="donut-leg-pct">${pctOf(s.v,total)}</div></div>`).join('')}</div>`;
+
+  const liq=[
+    {name:'Genial Investimentos',val:7500000},
+    {name:'Unicred CC',val:250000},
+    {name:'Itaú CC',val:229902},
+  ];
+  const imob=[
+    {name:'Apt. Jurerê',val:8000000},
+    {name:'Fazenda',val:5000000},
+    {name:'Casa Praia',val:3200000},
+    {name:'Sala Comercial',val:1700000},
+  ];
+  document.getElementById('pat-items-liq').innerHTML=liq.map(i=>`
+    <div class="pat-item"><div class="pat-item-name">${i.name}</div><div class="pat-item-val">${fmt(i.val)}</div></div>`).join('');
+  document.getElementById('pat-items-imob').innerHTML=imob.map(i=>`
+    <div class="pat-item"><div class="pat-item-name">${i.name}</div><div class="pat-item-val">${fmt(i.val)}</div></div>`).join('');
+}
+
+// ── REVISAR ───────────────────────────────────────────
+let reviewQueue=[], reviewIdx=0;
+
+function renderRevisar() {
+  const rev=reviewed.load();
+  const minVal=threshold.get();
+  document.getElementById('review-threshold-val').textContent=fmt(minVal);
+  reviewQueue=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal)
+    .sort((a,b)=>parseFloat(b.val)-parseFloat(a.val));
+  reviewIdx=0;
+  const skipped=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)<minVal).length;
+  document.getElementById('review-skipped').textContent=
+    skipped>0?`${skipped} lançamento${skipped>1?'s':''} abaixo do limite — edite na aba Despesas se necessário.`:'';
+  showReviewCard();
+}
+
+function showReviewCard() {
+  const wrap=document.getElementById('review-card-wrap');
+  const done=document.getElementById('review-done');
+  if(reviewIdx>=reviewQueue.length){
+    wrap.style.display='none'; done.style.display='flex';
+    document.getElementById('review-progress').textContent=''; return;
+  }
+  wrap.style.display='block'; done.style.display='none';
+  const t=reviewQueue[reviewIdx],total=reviewQueue.length;
+  document.getElementById('review-progress').textContent=`${reviewIdx+1} de ${total}`;
+  document.getElementById('review-prog-fill').style.width=`${(reviewIdx/total)*100}%`;
+  const card=document.getElementById('review-card');
+  card.innerHTML=`
+    <div class="rv-date">${t.date}</div>
+    <div class="rv-desc">${t.desc}</div>
+    <div class="rv-val">${fmt(parseFloat(t.val)||0)}</div>
+    <div class="rv-sub-row">
+      <span class="rv-cat-badge ${getCat(t.sub)==='Fixa'?'badge-blue':'badge-gold'}">${getCat(t.sub)}</span>
+      <span class="rv-sub">${t.sub}</span>
+    </div>
+    <div class="rv-edit-row">
+      <div class="rv-edit-field">
+        <div class="rv-edit-label">Subcategoria</div>
+        <select id="review-select" onchange="onReviewSubChange()">
+          ${ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="rv-edit-field">
+        <div class="rv-edit-label">Tipo</div>
+        <select id="review-cat">
+          <option value="Fixa" ${(t.cat||getCat(t.sub))==='Fixa'?'selected':''}>Fixa</option>
+          <option value="Variáveis" ${(t.cat||getCat(t.sub))!=='Fixa'?'selected':''}>Variável</option>
+        </select>
+      </div>
+    </div>`;
+  initSwipe(card);
+}
+
+function approveCard() {
+  const t=reviewQueue[reviewIdx]; if(!t) return;
+  reviewed.approve(t.id);
+  reviewIdx++;
+  showReviewCard();
+}
+
+function rejectCard() {
+  const t=reviewQueue[reviewIdx]; if(!t) return;
+  const sel=document.getElementById('review-select');
+  const cat=document.getElementById('review-cat');
+  const newSub=sel?sel.value:t.sub;
+  const newCat=cat?cat.value:getCat(newSub);
+  STATE.txs=STATE.txs.map(x=>x.id===t.id?{...x,sub:newSub,cat:newCat}:x);
+  cache.save(STATE.txs);
+  if(isConfigured()) sheetsPost({action:'editTx',tx:{...t,sub:newSub,cat:newCat}}).catch(()=>{});
+  reviewed.approve(t.id);
+  reviewIdx++;
+  showReviewCard();
+}
+
+function skipCard() { reviewIdx++; showReviewCard(); }
+
+function onReviewSubChange() {
+  const sel=document.getElementById('review-select');
+  const cat=document.getElementById('review-cat');
+  if(sel&&cat) cat.value=getCat(sel.value);
+}
+
+function initSwipe(el) {
+  let sx=0,sy=0;
+  el.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;sy=e.touches[0].clientY;},{passive:true});
+  el.addEventListener('touchend',e=>{
+    const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy;
+    if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>50){dx>0?approveCard():rejectCard();}
+  });
+}
+
+// ── IMPORTAR ──────────────────────────────────────────
+let pendingTxs=[];
+
+function renderImport() {
+  const dz=document.getElementById('drop-zone');
+  if(dz) {
+    dz.addEventListener('click',()=>document.getElementById('file-input').click());
+    dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over');});
+    dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
+    dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');handleFiles(e.dataTransfer.files);});
+    document.getElementById('file-input').onchange=e=>handleFiles(e.target.files);
+  }
+}
+
+function handleFiles(files) {
+  pendingTxs=[]; const logEl=document.getElementById('import-log'); logEl.innerHTML='';
+  document.getElementById('import-count').textContent='Lendo arquivos...';
+  document.getElementById('btn-confirm').disabled=true;
+  let processed=0;
+  Array.from(files).forEach(file=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const fname=file.name.toLowerCase();
+      let type='card';
+      if(fname.includes('unicred')&&fname.includes('fatura')) type='card_unicred';
+      else if(fname.includes('unicred')||fname.includes('extrato-')) type='unicred';
+      else if(fname.includes('itau')||fname.includes('extrato_conta')) type='itau';
+      pendingTxs.push(...expandParcelas(parseCSV(e.target.result,type)));
+      if(++processed===files.length) showImportPreview();
+    };
+    reader.readAsText(file,'latin-1');
+  });
+}
+
+function showImportPreview() {
+  const existing=cache.load();
+  const{fresh,dupes,exact}=detectDuplicates(pendingTxs,existing);
+  const logEl=document.getElementById('import-log');
+  let html='';
+  if(fresh.length>0){
+    html+=`<div class="import-section-label import-ok">✓ ${fresh.length} novos — serão adicionados</div>`;
+    html+=fresh.map(t=>`<div class="log-item">
+      <div class="log-dot" style="background:${t.sub==='NÃO CATEGORIZADO'?'#C0392B':'#1A8C5B'}"></div>
+      <div style="flex:1"><div class="log-desc">${t.desc.slice(0,40)}</div>
+      <div class="log-sub">${t.date} · ${t.sub}</div></div>
+      <div class="log-val">${fmt(t.val)}</div></div>`).join('');
+  }
+  if(dupes.length>0){
+    html+=`<div class="import-section-label import-warn">⚠ ${dupes.length} possíveis duplicatas</div>`;
+    html+=dupes.map(({tx,similar})=>`<div class="log-item" style="border-left:3px solid #E8A020">
+      <div class="log-dot" style="background:#E8A020"></div>
+      <div style="flex:1">
+        <div class="log-desc">${tx.desc.slice(0,38)}</div>
+        <div class="log-sub">${tx.date} · similar: ${similar.date} ${similar.desc.slice(0,20)}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="log-val">${fmt(tx.val)}</div>
+        <label style="font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px">
+          <input type="checkbox" class="dupe-include" data-id="${tx.id}" style="width:12px;height:12px"> incluir
+        </label>
+      </div></div>`).join('');
+  }
+  if(exact.length>0) html+=`<div class="import-section-label import-muted">✗ ${exact.length} já existentes — ignorados</div>`;
+  logEl.innerHTML=html;
+  document.getElementById('import-count').textContent=`${fresh.length} novos · ${dupes.length} a verificar · ${exact.length} ignorados`;
+  document.getElementById('btn-confirm').disabled=(fresh.length===0&&dupes.length===0);
+}
+
+async function confirmImport() {
+  const btn=document.getElementById('btn-confirm');
+  btn.disabled=true; btn.textContent='Salvando...';
+  const checkedDupes=[];
+  document.querySelectorAll('.dupe-include:checked').forEach(cb=>{
+    const tx=pendingTxs.find(t=>t.id===cb.dataset.id);
+    if(tx) checkedDupes.push(tx);
+  });
+  const existing=cache.load();
+  const{fresh}=detectDuplicates(pendingTxs,existing);
+  const toAdd=[...fresh,...checkedDupes];
+  const all=cache.load(); const keys=new Set(all.map(t=>t.id));
+  const realFresh=toAdd.filter(t=>!keys.has(t.id));
+  cache.save([...all,...realFresh]); STATE.txs=cache.load();
+  let added=realFresh.length;
+  if(isConfigured()&&realFresh.length>0){
+    try{await sheetsPost({action:'addTxs',txs:realFresh});}catch(e){STATE.error='Salvo localmente';}
+  }
+  showToast(`✓ ${added} novos lançamentos adicionados!`,'ok');
+  document.getElementById('import-count').textContent=`✓ ${added} adicionados`;
+  btn.textContent='Confirmar Importação'; pendingTxs=[];
+  refreshAll();
+}
+
+
+// ── AJUSTES ───────────────────────────────────────────
+let activeAjusteTab = 'revisar';
+
+function renderAjustes() {
+  setAjusteTab(activeAjusteTab);
+}
+
+function setAjusteTab(tab) {
+  activeAjusteTab = tab;
+  ['revisar','regras','import'].forEach(t => {
+    const btn = document.getElementById('atab-'+t);
+    const pane = document.getElementById('ajuste-'+t);
+    if (btn) btn.classList.toggle('active', t===tab);
+    if (pane) pane.style.display = t===tab ? 'block' : 'none';
+  });
+  if (tab==='revisar') { renderRevisar(); setTimeout(initSwipe, 100); }
+  if (tab==='regras')  renderRules();
+  if (tab==='import')  renderImport();
+
+  // Update pending badge
+  const rev = reviewed.load();
+  const minVal = threshold.get();
+  const pending = STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal).length;
+  const badge = document.getElementById('review-badge');
+  if (badge) {
+    badge.style.display = pending>0 ? 'flex' : 'none';
+    badge.textContent = pending>9 ? '9+' : pending;
+  }
+}
+
 // ── NAV ───────────────────────────────────────────────
-const SCREENS=['home','despesas','comparativo','patrimonio','revisar','regras','import'];
+const SCREENS=['home','despesas','comparativo','patrimonio','ajustes'];
 function showScreen(id) {
   SCREENS.forEach(s=>{
     document.getElementById('screen-'+s).classList.toggle('active',s===id);
     const n=document.getElementById('nav-'+s); if(n) n.classList.toggle('active',s===id);
   });
-  if (id==='import') renderImport();
-  if (id==='revisar') { renderRevisar(); setTimeout(initSwipe,100); }
+  if (id==='ajustes') renderAjustes();
   document.querySelector('.scroll-area').scrollTop=0;
   refreshAll();
 }
