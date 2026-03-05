@@ -803,3 +803,81 @@ select {
 }
 .cat-sub-row:last-of-type { border-bottom:none; }
 .cat-sub-row:active { background:var(--s3); }
+
+/* ── BAR VALUE ON TOP ── */
+.bar-val-top {
+  font-size:8px; color:var(--muted2); font-weight:600;
+  text-align:center; margin-bottom:3px;
+  font-feature-settings:'tnum';
+  white-space:nowrap; overflow:hidden;
+  writing-mode:vertical-rl;
+  transform:rotate(180deg);
+  height:36px; line-height:1;
+}
+.bar-col { align-items:center; }
+
+/* ── CATEGORY ROW REDESIGN ── */
+.cat-row-header {
+  padding:12px 16px;
+  cursor:pointer;
+  transition:background .12s;
+}
+.cat-row-header:active { background:var(--s2); }
+
+.crh-top {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:5px;
+}
+.crh-name {
+  font-size:13px; font-weight:600; color:var(--text);
+  flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+}
+.crh-right {
+  display:flex; align-items:center; gap:8px; flex-shrink:0; margin-left:10px;
+}
+.crh-val {
+  font-size:14px; font-weight:700; color:var(--text);
+  font-feature-settings:'tnum';
+}
+.crh-over { color:var(--red) !important; }
+.crh-warn { color:#C07010 !important; }
+.crh-arrow {
+  font-size:9px; color:var(--muted);
+  transition:transform .2s; width:12px; text-align:center;
+}
+
+.crh-meta {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:7px;
+}
+.crh-meta-left { display:flex; align-items:center; gap:5px; }
+.crh-bud-label { font-size:10px; color:var(--muted2); }
+.crh-bud-sep   { font-size:10px; color:var(--muted); }
+.crh-bud-pct   { font-size:10px; font-weight:600; color:var(--green); }
+.crh-rel       { font-size:10px; color:var(--muted); flex-shrink:0; }
+
+.crh-bar-track {
+  height:5px; background:var(--s3); border-radius:3px;
+  overflow:visible; position:relative;
+}
+.crh-bar-fill {
+  height:100%; background:var(--blue);
+  border-radius:3px; transition:width .4s;
+  position:absolute; left:0; top:0;
+}
+.crh-bar-fill.crh-bar-over { background:var(--red); }
+.crh-bar-extra {
+  height:100%; background:rgba(192,57,43,.3);
+  border-radius:0 3px 3px 0;
+  position:absolute; top:0;
+  left:100%;
+}
+
+/* ── SORTABLE TABLE HEADER ── */
+.th-sort {
+  cursor:pointer;
+  user-select:none;
+  white-space:nowrap;
+}
+.th-sort:hover { color:var(--blue); }
+.th-sort:active { background:var(--s3); }

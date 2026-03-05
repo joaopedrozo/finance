@@ -208,17 +208,20 @@ function byMonthTotals(txs) {
 function monthBarChart(byM, budgetMonthly) {
   const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
   const maxVal=Math.max(...months.map(m=>byM[m]||0), budgetMonthly||0, 1);
+  const hasData=months.some(m=>byM[m]>0);
+  if(!hasData) return '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">Sem dados</div>';
   return `<div class="bar-chart">${months.map((m,i)=>{
     const v=byM[m]||0, h=v>0?Math.max((v/maxVal*100),3):0;
     const over=budgetMonthly&&v>budgetMonthly;
-    const active=m==='01'||m==='02';
-    return `<div class="bar-col">
+    const active=v>0;
+    const cls=over?'bar-over':active?'bar-active':'bar-future';
+    return `<div class="bar-col" onclick="${v>0?`selectHomeMonth('${m}')`:''}" style="${v>0?'cursor:pointer':''}">
+      ${v>0?`<div class="bar-val-top">${fmtK(v)}</div>`:'<div class="bar-val-top" style="opacity:0">—</div>'}
       <div class="bar-wrap">
         ${budgetMonthly?`<div class="bar-budget-line" style="bottom:${(budgetMonthly/maxVal*100).toFixed(1)}%"></div>`:''}
-        <div class="bar-fill ${over?'bar-over':active?'bar-active':'bar-future'}" style="height:${h.toFixed(1)}%"
-          title="${MNAMES[i]}: ${fmt(v)}"></div>
+        <div class="bar-fill ${cls}" style="height:${h.toFixed(1)}%"></div>
       </div>
-      <div class="bar-label">${MNAMES[i].slice(0,1)}</div>
+      <div class="bar-label">${MNAMES[i].slice(0,3)}</div>
     </div>`;
   }).join('')}</div>`;
 }
@@ -481,16 +484,8 @@ function renderDespesas() {
     return pb-pa;
   });
   const maxVal=sorted[0]?.[1]||1;
-  // Sort header icons
-  const si = (col) => despSort===col+`_desc`?'↓':despSort===col+`_asc`?'↑':despSort===col?'↓':'↕';
-  const hdr = `<div class="desp-hdr">
-    <div class="desp-hdr-col desp-hdr-name" onclick="setDespSort('alpha')">Categoria ${despSort==='alpha'?'↓':'↕'}</div>
-    <div class="desp-hdr-col desp-hdr-val"  onclick="setDespSort('valor')">Valor ${despSort==='valor_desc'?'↓':despSort==='valor_asc'?'↑':'↕'}</div>
-    <div class="desp-hdr-col desp-hdr-pct"  onclick="setDespSort('budget_pct')">% Orç ${despSort==='budget_pct'?'↓':'↕'}</div>
-  </div>`;
-
   document.getElementById('desp-table').innerHTML=sorted.length
-    ? hdr + sorted.slice(0,10).map(([name,val],i)=>{
+    ? sorted.map(([name,val],i)=>{
         const bud=BUDGET[name], over=bud&&val>bud;
         const barC=bud?(over?'#D63E50':'#1E9E63'):COLORS[i%COLORS.length];
         return `<div class="cat-row" onclick="openDetail('${name}')">
@@ -504,35 +499,6 @@ function renderDespesas() {
         </div>`;
       }).join('')
     : '<div style="padding:24px;text-align:center;color:var(--muted)">Sem dados para este mês</div>';
-
-  // 80% pizza — categorias que somam 80% das despesas
-  let cumul=0, segs80=[], others80=0;
-  sorted.forEach(([label,v],i)=>{
-    if(cumul/total<0.80){ segs80.push({label,v,c:COLORS[i%COLORS.length]}); cumul+=v; }
-    else others80+=v;
-  });
-  if(others80>0) segs80.push({label:'Demais',v:others80,c:'#C8D8E8'});
-  document.getElementById('desp-donut').innerHTML=segs80.length
-    ? donutSVG(segs80)+`<div class="donut-legend-v">${segs80.map(s=>`
-        <div class="donut-leg-item" onclick="openDetail('${s.label}')" style="cursor:pointer">
-          <div class="donut-leg-dot" style="background:${s.c}"></div>
-          <div class="donut-leg-name">${s.label}</div>
-          <div class="donut-leg-val">${fmtK(s.v)}</div>
-          <div class="donut-leg-pct">${pctOf(s.v,total)}</div>
-        </div>`).join('')}</div>`:'' ;
-
-  // Top 10 lançamentos individuais
-  const monthTxs = txs.filter(t=>t.date&&t.date.startsWith(`2026-${activeMonth}`)&&t.sub!=='NÃO CATEGORIZADO');
-  const top10txs = [...monthTxs].sort((a,b)=>parseFloat(b.val)-parseFloat(a.val)).slice(0,10);
-  document.getElementById('desp-top10-txs').innerHTML = top10txs.map((t,i)=>`
-    <div class="cat-row" onclick="openEditTx('${t.id}')" style="cursor:pointer">
-      <div style="font-size:11px;color:var(--muted);width:18px;flex-shrink:0;font-weight:600">#${i+1}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date} · <span style="color:var(--blue)">${t.sub}</span></div>
-      </div>
-      <div style="font-size:13px;font-weight:600;color:var(--red);font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
-    </div>`).join('');
 
   const fixa=ag.fixaM[activeMonth]||0, vari=ag.varM[activeMonth]||0;
   document.getElementById('desp-kpi-total').textContent=fmt(total);
@@ -590,6 +556,7 @@ function renderComparativo() {
 function setCmpView(v) { cmpView=v; renderComparativo(); }
 
 let cmpMensalSort = 'total_desc';
+let cmpAnualSort  = 'spent_desc';
 
 function renderCmpMensal(txs) {
   const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
@@ -602,48 +569,67 @@ function renderCmpMensal(txs) {
 
   const activeMths=months.filter(m=>Object.values(allSubs).some(mv=>mv[m]));
 
-  // Sort
   let entries=Object.entries(allSubs);
-  if (cmpMensalSort==='total_desc') entries.sort((a,b)=>{
-    return Object.values(b[1]).reduce((x,y)=>x+y,0)-Object.values(a[1]).reduce((x,y)=>x+y,0);
-  });
-  else if (cmpMensalSort==='total_asc') entries.sort((a,b)=>{
-    return Object.values(a[1]).reduce((x,y)=>x+y,0)-Object.values(b[1]).reduce((x,y)=>x+y,0);
-  });
-  else if (cmpMensalSort==='alpha') entries.sort((a,b)=>a[0].localeCompare(b[0]));
-  else if (cmpMensalSort==='budget') entries.sort((a,b)=>(BUDGET[b[0]]||0)-(BUDGET[a[0]]||0));
+  const getTotal=([,mv])=>Object.values(mv).reduce((x,y)=>x+y,0);
 
-  const si=(col)=>cmpMensalSort===col+'_desc'?'↓':cmpMensalSort===col+'_asc'?'↑':cmpMensalSort===col?'↓':'↕';
+  // Sort by column
+  const [sortCol, sortDir] = cmpMensalSort.split('_');
+  const desc = sortDir==='desc';
+  if (sortCol==='alpha')  entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
+  else if (sortCol==='budget') entries.sort((a,b)=>desc?(BUDGET[b[0]]||0)-(BUDGET[a[0]]||0):(BUDGET[a[0]]||0)-(BUDGET[b[0]]||0));
+  else if (sortCol==='total')  entries.sort((a,b)=>desc?getTotal(b)-getTotal(a):getTotal(a)-getTotal(b));
+  else if (sortCol==='pct')    entries.sort((a,b)=>{
+    const pa=BUDGET[a[0]]?getTotal(a)/BUDGET[a[0]]:0;
+    const pb=BUDGET[b[0]]?getTotal(b)/BUDGET[b[0]]:0;
+    return desc?pb-pa:pa-pb;
+  });
+  else {
+    // Sort by specific month column e.g. 'month01'
+    const mo=sortCol.replace('month','');
+    entries.sort((a,b)=>desc?(b[1][mo]||0)-(a[1][mo]||0):(a[1][mo]||0)-(b[1][mo]||0));
+  }
 
-  // Fixed column widths for alignment
-  const CAT_W=110, BUD_W=52, M_W=52, TOT_W=58;
+  const si=(col)=>{
+    const [sc,sd]=cmpMensalSort.split('_');
+    if(sc!==col) return '<span style="color:var(--muted);font-size:8px">↕</span>';
+    return sd==='desc'?'↓':'↑';
+  };
+
+  const CAT_W=108, BUD_W=54, M_W=54, TOT_W=60, PCT_W=44;
 
   let html=`<div class="cmp-scroll-wrap"><table class="bud-table">
     <colgroup>
       <col style="width:${CAT_W}px;min-width:${CAT_W}px">
       <col style="width:${BUD_W}px;min-width:${BUD_W}px">
-      ${activeMths.map(()=>`<col style="width:${M_W}px;min-width:${M_W}px">`).join('')}
+      ${activeMths.map(m=>`<col style="width:${M_W}px;min-width:${M_W}px">`).join('')}
       <col style="width:${TOT_W}px;min-width:${TOT_W}px">
+      <col style="width:${PCT_W}px;min-width:${PCT_W}px">
     </colgroup>
     <thead><tr>
-      <th class="bud-cat" onclick="setCmpMensalSort('alpha')" style="cursor:pointer">Cat ${si('alpha')}</th>
-      <th class="bud-bud" onclick="setCmpMensalSort('budget')" style="cursor:pointer;text-align:right">Orç ${si('budget')}</th>
-      ${activeMths.map(m=>`<th class="bud-m" style="text-align:right">${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][parseInt(m)-1]}</th>`).join('')}
-      <th class="bud-tot" onclick="setCmpMensalSort('total')" style="cursor:pointer;text-align:right">Total ${si('total')}</th>
+      <th class="bud-cat th-sort" onclick="setCmpMensalSort('alpha')">Cat ${si('alpha')}</th>
+      <th class="bud-bud th-sort" onclick="setCmpMensalSort('budget')">Orç ${si('budget')}</th>
+      ${activeMths.map(m=>`<th class="bud-m th-sort" onclick="setCmpMensalSort('month${m}')">${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][parseInt(m)-1]} ${si('month'+m)}</th>`).join('')}
+      <th class="bud-tot th-sort" onclick="setCmpMensalSort('total')">Total ${si('total')}</th>
+      <th class="bud-m th-sort"  onclick="setCmpMensalSort('pct')">% ${si('pct')}</th>
     </tr></thead><tbody>`;
 
   entries.forEach(([sub,byMonth])=>{
     const bud=BUDGET[sub]||0;
     const total=Object.values(byMonth).reduce((a,b)=>a+b,0);
+    const pct=bud?(total/bud*100).toFixed(0):null;
+    const over=bud&&total>bud;
     html+=`<tr onclick="openDetail('${sub}')">
-      <td class="bud-cat" style="width:${CAT_W}px">${sub}</td>
+      <td class="bud-cat">${sub}</td>
       <td class="bud-bud" style="text-align:right;color:var(--muted)">${bud?fmtK(bud):'—'}</td>
       ${activeMths.map(m=>{
         const v=byMonth[m]||0;
-        const over=bud&&v>bud;
-        return `<td class="bud-m ${over?'cell-over':v>0?'cell-ok':'cell-empty'}" style="text-align:right">${v>0?fmtK(v):'—'}</td>`;
+        const ov=bud&&v>bud;
+        return `<td class="bud-m ${ov?'cell-over':v>0?'cell-ok':'cell-empty'}" style="text-align:right">${v>0?fmtK(v):'—'}</td>`;
       }).join('')}
-      <td class="bud-tot" style="text-align:right;font-weight:700">${fmtK(total)}</td>
+      <td class="bud-tot" style="text-align:right;color:${over?'var(--red)':'var(--text)'}">${fmtK(total)}</td>
+      <td class="bud-m" style="text-align:right">
+        ${pct?`<span style="font-size:10px;font-weight:600;color:${over?'var(--red)':parseInt(pct)>80?'#C07010':'var(--green)'}">${pct}%</span>`:'—'}
+      </td>
     </tr>`;
   });
 
@@ -652,29 +638,51 @@ function renderCmpMensal(txs) {
 }
 
 function setCmpMensalSort(col) {
-  cmpMensalSort = cmpMensalSort===col+'_desc' ? col+'_asc' : col+'_desc';
+  const [sc] = cmpMensalSort.split('_');
+  cmpMensalSort = sc===col
+    ? cmpMensalSort.endsWith('_desc') ? col+'_asc' : col+'_desc'
+    : col+'_desc';
   renderCmpMensal(STATE.txs);
 }
 
 function renderCmpAnual(txs) {
-  // Categoria | Orçado anual | Gasto acum. | Saldo | % usado
+  const nMonths=[...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].length||1;
   const allSubs={};
   txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO')
     allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0);
   });
-  const sorted=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]);
 
-  // sorted already by spent desc — add clickable total header
+  let entries=Object.entries(allSubs);
+  const [sc,sd]=cmpAnualSort.split('_'); const desc=sd==='desc';
+  if      (sc==='alpha')  entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
+  else if (sc==='budget') entries.sort((a,b)=>desc?((BUDGET[b[0]]||0)*12)-((BUDGET[a[0]]||0)*12):((BUDGET[a[0]]||0)*12)-((BUDGET[b[0]]||0)*12));
+  else if (sc==='spent')  entries.sort((a,b)=>desc?b[1]-a[1]:a[1]-b[1]);
+  else if (sc==='saldo')  entries.sort((a,b)=>{
+    const sa=(BUDGET[a[0]]||0)*12-a[1], sb=(BUDGET[b[0]]||0)*12-b[1];
+    return desc?sa-sb:sb-sa;
+  });
+  else if (sc==='pct')    entries.sort((a,b)=>{
+    const pa=BUDGET[a[0]]?a[1]/((BUDGET[a[0]]||0)*12):0;
+    const pb=BUDGET[b[0]]?b[1]/((BUDGET[b[0]]||0)*12):0;
+    return desc?pb-pa:pa-pb;
+  });
+
+  const si=(col)=>{
+    const [c2,d2]=cmpAnualSort.split('_');
+    if(c2!==col) return '<span style="color:var(--muted);font-size:8px">↕</span>';
+    return d2==='desc'?'↓':'↑';
+  };
+
   let html=`<table class="bud-table" style="width:100%">
     <thead><tr>
-      <th class="bud-cat" style="cursor:pointer" onclick="renderCmpAnual(STATE.txs)">Categoria ↕</th>
-      <th class="bud-bud" style="text-align:right">Anual</th>
-      <th class="bud-bud" style="text-align:right">Gasto ↓</th>
-      <th class="bud-bud" style="text-align:right">Saldo</th>
-      <th class="bud-m"  style="text-align:right">%</th>
+      <th class="bud-cat th-sort" onclick="setCmpAnualSort('alpha')">Cat ${si('alpha')}</th>
+      <th class="bud-bud th-sort" onclick="setCmpAnualSort('budget')" style="text-align:right">Anual ${si('budget')}</th>
+      <th class="bud-bud th-sort" onclick="setCmpAnualSort('spent')"  style="text-align:right">Gasto ${si('spent')}</th>
+      <th class="bud-bud th-sort" onclick="setCmpAnualSort('saldo')"  style="text-align:right">Saldo ${si('saldo')}</th>
+      <th class="bud-m  th-sort"  onclick="setCmpAnualSort('pct')"    style="text-align:right">% ${si('pct')}</th>
     </tr></thead><tbody>`;
 
-  sorted.forEach(([sub,spent])=>{
+  entries.forEach(([sub,spent])=>{
     const budA=(BUDGET[sub]||0)*12;
     const saldo=budA-spent;
     const pct=budA?Math.min((spent/budA*100),999):null;
@@ -682,16 +690,24 @@ function renderCmpAnual(txs) {
     html+=`<tr onclick="openDetail('${sub}')">
       <td class="bud-cat">${sub}</td>
       <td class="bud-bud" style="text-align:right;color:var(--muted)">${budA?fmtK(budA):'—'}</td>
-      <td class="bud-bud" style="text-align:right;color:var(--text)">${fmtK(spent)}</td>
-      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--green)'}">${budA?(over?'-':'')+fmtK(Math.abs(saldo)):'—'}</td>
-      <td class="bud-m" style="text-align:right">
-        ${pct!==null?`<span class="${over?'prog-over':'prog-ok'}">${pct.toFixed(0)}%</span>`:'—'}
+      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--text)'};font-weight:600">${fmtK(spent)}</td>
+      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--green)'}">${budA?(over?'−':'+')+ fmtK(Math.abs(saldo)):'—'}</td>
+      <td class="bud-m"   style="text-align:right">
+        ${pct!==null?`<span style="font-size:10px;font-weight:600;color:${over?'var(--red)':pct>80?'#C07010':'var(--green)'}">${pct.toFixed(0)}%</span>`:'—'}
       </td>
     </tr>`;
   });
 
   html+=`</tbody></table>`;
   document.getElementById('cmp-rows').innerHTML=html;
+}
+
+function setCmpAnualSort(col) {
+  const [sc]=cmpAnualSort.split('_');
+  cmpAnualSort = sc===col
+    ? cmpAnualSort.endsWith('_desc') ? col+'_asc' : col+'_desc'
+    : col+'_desc';
+  renderCmpAnual(STATE.txs);
 }
 
 // ── PATRIMÔNIO ────────────────────────────────────────
