@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JCRP Diagnóstico</title>
+<style>
+body{font-family:monospace;background:#0a0a0f;color:#eee;padding:16px;font-size:13px}
+h2{color:#2C6FAC;margin-bottom:16px}
+.ok{color:#1A8C5B}.err{color:#D63E50}.warn{color:#E8A020}
+.row{padding:6px 0;border-bottom:1px solid #222}
+.big{font-size:18px;font-weight:bold;margin:12px 0}
+button{background:#2C6FAC;color:#fff;border:none;padding:10px 20px;border-radius:8px;font-size:14px;cursor:pointer;margin:4px;width:100%}
+</style>
+</head>
+<body>
+<h2>🔍 JCRP Diagnóstico</h2>
+<div id="out"></div>
+<br>
+<button onclick="runSeed()">🌱 Forçar Seed Data</button>
+<button onclick="clearAll()">🗑 Limpar cache e recarregar</button>
+<button onclick="goApp()">→ Abrir App</button>
+
+<script>
+const out = document.getElementById('out');
+function log(msg, cls) {
+  out.innerHTML += '<div class="row '+(cls||'')+'">' + msg + '</div>';
+}
+
+// 1. localStorage
+try {
+  localStorage.setItem('_t','1'); localStorage.removeItem('_t');
+  log('✓ localStorage OK', 'ok');
+} catch(e) { log('✗ localStorage FALHOU: ' + e.message, 'err'); }
+
+// 2. Dados existentes
+const raw = localStorage.getItem('jcrp_txs');
+if (raw) {
+  try {
+    const txs = JSON.parse(raw);
+    log('✓ Cache: <b>' + txs.length + ' lançamentos</b>', txs.length > 0 ? 'ok' : 'warn');
+    if (txs.length > 0) {
+      log('  Primeiro: ' + txs[0].date + ' · ' + txs[0].desc + ' · R$' + txs[0].val);
+      log('  Último: ' + txs[txs.length-1].date + ' · ' + txs[txs.length-1].desc);
+    }
+  } catch(e) { log('✗ Erro ao ler cache: ' + e.message, 'err'); }
+} else {
+  log('⚠ Cache vazio (jcrp_txs não existe)', 'warn');
+}
+
+// 3. Outros dados
+const reviewed = localStorage.getItem('jcrp_reviewed');
+const threshold = localStorage.getItem('jcrp_review_threshold');
+const rules = localStorage.getItem('jcrp_user_rules');
+log('  jcrp_reviewed: ' + (reviewed ? JSON.parse(reviewed) && Object.keys(JSON.parse(reviewed)).length + ' itens' : 'vazio'));
+log('  jcrp_review_threshold: ' + (threshold || 'não definido'));
+log('  jcrp_user_rules: ' + (rules ? JSON.parse(rules).length + ' regras' : 'vazio'));
+
+// 4. Service Worker
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    log('✓ Service Workers: ' + regs.length + ' registrado(s)', regs.length > 0 ? 'ok' : 'warn');
+    regs.forEach(r => log('  scope: ' + r.scope + ' · state: ' + (r.active ? r.active.state : 'none')));
+  });
+} else {
+  log('✗ Service Worker não suportado', 'err');
+}
+
+// 5. Load app.js and test
+const s = document.createElement('script');
+s.src = 'app.js?' + Date.now();
+s.onerror = () => log('✗ app.js NÃO CARREGOU — verifique se o arquivo existe', 'err');
+s.onload = () => {
+  log('✓ app.js carregado', 'ok');
+  const checks = ['fmt','fmtK','seedData','loadData','renderHome','renderDespesas',
+    'renderComparativo','renderPatrimonio','renderAjustes','openDetail','openEditTx',
+    'openManual','openSplit','STATE','cache','BUDGET'];
+  let missing = [];
+  checks.forEach(fn => {
+    if (typeof window[fn] === 'undefined') missing.push(fn);
+  });
+  if (missing.length === 0) {
+    log('✓ Todas as ' + checks.length + ' funções presentes', 'ok');
+  } else {
+    log('✗ Funções ausentes: ' + missing.join(', '), 'err');
+  }
+  
+  // Test seedData
+  try {
+    seedData();
+    const txs = JSON.parse(localStorage.getItem('jcrp_txs') || '[]');
+    log('✓ seedData(): ' + txs.length + ' transações carregadas', txs.length > 0 ? 'ok' : 'err');
+  } catch(e) { log('✗ seedData() erro: ' + e.message, 'err'); }
+};
+document.head.appendChild(s);
+
+function runSeed() {
+  if (typeof seedData === 'function') {
+    seedData();
+    const txs = JSON.parse(localStorage.getItem('jcrp_txs')||'[]');
+    alert('✓ ' + txs.length + ' lançamentos carregados no cache!\nAcesse o app agora.');
+  } else {
+    alert('seedData não disponível — app.js não carregou');
+  }
+}
+
+function clearAll() {
+  if (confirm('Limpar TODO o cache local?')) {
+    localStorage.clear();
+    if ('caches' in window) caches.keys().then(ks => ks.forEach(k => caches.delete(k)));
+    navigator.serviceWorker?.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
+    setTimeout(() => location.reload(), 500);
+  }
+}
+
+function goApp() { location.href = 'index.html'; }
+</script>
+</body>
+</html>
