@@ -291,6 +291,8 @@ function renderHome() {
   // Top 5 categories (all time)
   const allSubs={};
   txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
+  const uncatTotal=txs.filter(t=>t.sub==='NÃO CATEGORIZADO').reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  const uncatCount=txs.filter(t=>t.sub==='NÃO CATEGORIZADO').length;
   const top5=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const maxV=top5[0]?.[1]||1;
 
@@ -351,6 +353,14 @@ function renderHome() {
           '<div class="htop5-val">'+fmtK(val)+'</div>'+
         '</div>'
       ).join('')+
+      (uncatTotal>0
+        ? '<div class="htop5-row htop5-uncat" onclick="showScreen(\'despesas\')">'+
+            '<div class="htop5-idx">⚠</div>'+
+            '<div class="htop5-name" style="color:var(--muted2)">Sem categoria</div>'+
+            '<div class="htop5-bar-wrap"></div>'+
+            '<div class="htop5-val" style="color:var(--muted2)">'+fmtK(uncatTotal)+'</div>'+
+          '</div>'
+        : '')+
     '</div>'+
 
     '</div>';
@@ -397,6 +407,8 @@ function renderDespesas() {
   document.getElementById('desp-kpi-fixa').textContent=fmt(ag.fixaM[activeMonth]||0);
   document.getElementById('desp-kpi-var').textContent=fmt(ag.varM[activeMonth]||0);
 
+  // Keep NÃO CATEGORIZADO — show it separately at the bottom
+  const uncatVal = ag.bySub['NÃO CATEGORIZADO'] || 0;
   const entries=Object.entries(ag.bySub).filter(([k])=>k!=='NÃO CATEGORIZADO');
   let sorted;
   if      (despSort==='valor_desc')  sorted=[...entries].sort((a,b)=>b[1]-a[1]);
@@ -453,6 +465,37 @@ function renderDespesas() {
       '</div>';
     }).join('')
     : '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">Sem dados para este mês</div>';
+
+  // Append NÃO CATEGORIZADO at bottom if exists
+  if (uncatVal > 0) {
+    const uncatTxs = txs.filter(t=>t.date&&t.date.startsWith('2026-'+activeMonth)&&t.sub==='NÃO CATEGORIZADO');
+    const existing = document.getElementById('desp-table').innerHTML;
+    document.getElementById('desp-table').innerHTML = existing +
+      '<div class="cat-row-wrap" style="border-top:2px dashed var(--border)">'+
+        '<div class="cat-row-header" onclick="toggleCatRow(\'catrow-uncat\',\'NÃO CATEGORIZADO\')">'+
+          '<div class="crh-top">'+
+            '<div class="crh-name" style="color:var(--muted2)">⚠ Sem categoria</div>'+
+            '<div class="crh-right">'+
+              '<div class="crh-val" style="color:var(--muted2)">'+fmt(uncatVal)+'</div>'+
+              '<div id="arrow-uncat" class="crh-arrow">▼</div>'+
+            '</div>'+
+          '</div>'+
+          '<div class="crh-meta"><div class="crh-meta-left"><span class="crh-bud-label" style="color:var(--muted)">'+uncatTxs.length+' lançamento'+(uncatTxs.length!==1?'s':'')+' aguardando categorização</span></div></div>'+
+        '</div>'+
+        '<div id="catrow-uncat" class="cat-row-detail" style="display:none">'+
+          uncatTxs.sort((a,b)=>parseFloat(b.val)-parseFloat(a.val)).map(t=>
+            '<div class="cat-sub-row" onclick="openEditTx(\''+t.id+'\')">'+
+              '<div style="flex:1;min-width:0">'+
+                '<div style="font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+t.desc+'</div>'+
+                '<div style="font-size:10px;color:var(--muted);margin-top:1px">'+t.date+'</div>'+
+              '</div>'+
+              '<div style="font-size:11px;font-weight:600;color:var(--muted2)">'+fmt(parseFloat(t.val)||0)+'</div>'+
+            '</div>'
+          ).join('')+
+          '<div style="padding:8px 12px"><button onclick="showUncategorized()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0">Ver todos sem categoria →</button></div>'+
+        '</div>'+
+      '</div>';
+  }
 }
 
 function setMonth(m) { activeMonth=m; renderDespesas(); }
@@ -703,8 +746,13 @@ function renderRules() {
     // Header info
     '<div class="rules-wrap">'+
     (cats>0
-      ? '<div class="rules-banner"><span>'+cats+' lançamento'+(cats>1?'s':'')+' sem categoria</span>'+
-        '<button onclick="applyAndRefresh()" class="rules-apply-btn">Aplicar regras</button></div>'
+      ? '<div class="rules-banner">'+
+          '<span>'+cats+' lançamento'+(cats>1?'s':'')+' sem categoria</span>'+
+          '<div style="display:flex;gap:6px">'+
+            '<button onclick="showUncategorized()" class="rules-apply-btn" style="background:var(--s1);color:var(--blue);border:1px solid var(--blue)">Ver</button>'+
+            '<button onclick="applyAndRefresh()" class="rules-apply-btn">Aplicar regras</button>'+
+          '</div>'+
+        '</div>'
       : '')+
 
     // Nova regra
@@ -1040,6 +1088,18 @@ function setReviewThreshold(){const v=parseFloat(document.getElementById('review
 
 // ── BUSCA ─────────────────────────────────────────
 let searchFilter='all';
+
+function showUncategorized() {
+  openSearch();
+  setTimeout(()=>{
+    // activate uncat filter
+    document.querySelectorAll('#search-filters .sort-pill').forEach(b=>{
+      b.classList.toggle('active', b.textContent.includes('Sem cat'));
+    });
+    searchFilter='uncat';
+    runSearch();
+  }, 150);
+}
 
 function openSearch(){document.getElementById('search-modal').classList.add('open');setTimeout(()=>document.getElementById('search-input').focus(),100);runSearch();}
 function closeSearch(){document.getElementById('search-modal').classList.remove('open');document.getElementById('search-input').value='';}
