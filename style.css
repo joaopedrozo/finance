@@ -1162,3 +1162,125 @@ select {
 .rules-footer {
   font-size:11px; color:var(--muted); text-align:center; padding-top:4px;
 }
+
+/* ══ BUDGET EDITOR ══════════════════════════════════════════ */
+.bud-edit-wrap { padding:0 16px 24px; display:flex; flex-direction:column; gap:0; }
+
+.bud-edit-header {
+  background:var(--s1); border:1px solid var(--border);
+  border-radius:14px; padding:16px; margin-bottom:12px;
+  display:flex; align-items:center; justify-content:space-between;
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.bud-edit-total-label { font-size:10px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+.bud-edit-total { font-size:22px; font-weight:300; color:var(--blue); font-feature-settings:'tnum'; }
+
+.bud-edit-section-label {
+  font-size:10px; font-weight:600; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted);
+  padding:8px 0 6px;
+}
+.bud-edit-list {
+  background:var(--s1); border:1px solid var(--border);
+  border-radius:14px; overflow:hidden;
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+  margin-bottom:4px;
+}
+.bud-edit-row {
+  display:flex; align-items:center;
+  padding:11px 14px; border-bottom:1px solid var(--border);
+  gap:12px;
+}
+.bud-edit-row:last-child { border-bottom:none; }
+.bud-edit-name {
+  flex:1; font-size:13px; color:var(--text);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.bud-edit-input-wrap {
+  display:flex; align-items:center; gap:4px;
+  background:var(--s2); border:1px solid var(--border);
+  border-radius:8px; padding:4px 8px;
+  flex-shrink:0;
+}
+.bud-edit-input-wrap:focus-within {
+  border-color:var(--blue); background:var(--golddim);
+}
+.bud-edit-prefix { font-size:11px; color:var(--muted); flex-shrink:0; }
+.bud-edit-input {
+  width:72px; border:none; background:transparent;
+  font-size:13px; font-weight:600; color:var(--text);
+  text-align:right; font-feature-settings:'tnum';
+  font-family:inherit; outline:none;
+  -webkit-appearance:none;
+}
+.bud-edit-hint {
+  font-size:11px; color:var(--muted); text-align:center;
+  padding:14px 0 4px;
+}
+
+/* ══ CONCILIAÇÃO ════════════════════════════════════════════ */
+.concil-wrap { padding:0 16px 24px; display:flex; flex-direction:column; gap:10px; }
+
+.concil-card {
+  background:var(--s1); border:1px solid var(--border);
+  border-radius:14px; overflow:hidden;
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.concil-card-info { background:var(--s2); }
+.concil-card-title {
+  font-size:10px; font-weight:600; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--muted);
+  padding:13px 16px 10px;
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px;
+}
+.concil-badge-warn {
+  background:rgba(45,107,228,.12); color:var(--blue);
+  font-size:10px; font-weight:700; padding:1px 7px;
+  border-radius:20px; letter-spacing:0;
+}
+.concil-badge-ok {
+  background:rgba(26,140,91,.12); color:var(--green);
+  font-size:10px; font-weight:700; padding:1px 7px;
+  border-radius:20px; letter-spacing:0;
+}
+
+.concil-row {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 16px; border-bottom:1px solid var(--border);
+  font-size:13px; color:var(--text); gap:12px;
+}
+.concil-row:last-child { border-bottom:none; }
+.concil-total { font-weight:600; }
+.concil-warn { color:var(--blue); }
+.concil-ok   { color:var(--green); }
+.concil-row-name { font-size:13px; color:var(--text); }
+.concil-row-sub  { font-size:10px; color:var(--muted); margin-top:2px; }
+.concil-row-val  { font-size:13px; font-weight:600; color:var(--text); font-feature-settings:'tnum'; flex-shrink:0; }
+
+.concil-dupe {
+  padding:10px 16px; border-bottom:1px solid var(--border);
+}
+.concil-dupe:last-child { border-bottom:none; }
+.concil-dupe-header {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:4px;
+}
+.concil-dupe-val { font-size:13px; font-weight:600; color:var(--blue); font-feature-settings:'tnum'; }
+.concil-dupe-dates { font-size:10px; color:var(--muted); }
+.concil-dupe-desc {
+  font-size:11px; color:var(--muted2); padding:2px 0;
+  cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.concil-dupe-desc:active { color:var(--blue); }
+
+.concil-empty {
+  font-size:12px; color:var(--muted); padding:16px;
+  text-align:center;
+}
+.concil-info-row {
+  font-size:12px; color:var(--muted2); padding:8px 16px;
+  border-bottom:1px solid var(--border);
+  line-height:1.4;
+}
+.concil-info-row:last-child { border-bottom:none; }

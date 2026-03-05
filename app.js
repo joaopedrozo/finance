@@ -154,6 +154,10 @@ async function sheetsPost(body) {
 
 // ── LOAD ──────────────────────────────────────────
 async function loadData(silent=false) {
+  // Load saved budget overrides
+  const savedBud = budgetStore.load();
+  if (savedBud) { Object.keys(BUDGET).forEach(k=>delete BUDGET[k]); Object.assign(BUDGET, savedBud); }
+
   STATE.error = null;
   // 1. Show local data immediately (never wait for network to render)
   STATE.txs = cache.load();
@@ -640,6 +644,241 @@ async function renderPatrimonio() {
   document.getElementById('pat-items-imob').innerHTML=imob.map(i=>'<div class="pat-item"><div class="pat-item-name">'+i.name+'</div><div class="pat-item-val">'+fmt(i.val)+'</div></div>').join('');
 }
 
+
+// ── ORÇAMENTO ─────────────────────────────────────
+const budgetStore = {
+  load() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('jcrp_budget')||'null');
+      if (saved && typeof saved === 'object') return saved;
+    } catch {}
+    return null;
+  },
+  save(obj) { localStorage.setItem('jcrp_budget', JSON.stringify(obj)); }
+};
+
+function getBudget() {
+  return budgetStore.load() || {...BUDGET};
+}
+
+function renderBudget() {
+  const bud = getBudget();
+  const total = Object.values(bud).reduce((a,b)=>a+b,0);
+
+  // All subcats — those with budget + those without
+  const withBudget = ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO' && bud[s]>0)
+    .sort((a,b)=>(bud[b]||0)-(bud[a]||0));
+  const noBudget = ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO' && !bud[s]);
+
+  let html = '<div class="bud-edit-wrap">'+
+    '<div class="bud-edit-header">'+
+      '<div class="bud-edit-total-label">Total orçado / mês</div>'+
+      '<div class="bud-edit-total">'+fmt(total)+'</div>'+
+    '</div>'+
+
+    // Categories with budget
+    '<div class="bud-edit-section-label">Com orçamento</div>'+
+    '<div class="bud-edit-list">'+
+    withBudget.map(sub=>
+      '<div class="bud-edit-row">'+
+        '<div class="bud-edit-name">'+sub+'</div>'+
+        '<div class="bud-edit-input-wrap">'+
+          '<span class="bud-edit-prefix">R$</span>'+
+          '<input type="number" class="bud-edit-input" data-sub="'+sub+'"'+
+            ' value="'+(bud[sub]||0)+'" min="0" step="100"'+
+            ' onchange="saveBudgetField(\''+sub+'\',this.value)"'+
+            ' onblur="renderBudget()">'+
+        '</div>'+
+      '</div>'
+    ).join('')+
+    '</div>'+
+
+    // Categories without budget
+    (noBudget.length>0
+      ? '<div class="bud-edit-section-label" style="margin-top:8px">Sem orçamento definido</div>'+
+        '<div class="bud-edit-list">'+
+        noBudget.map(sub=>
+          '<div class="bud-edit-row">'+
+            '<div class="bud-edit-name" style="color:var(--muted)">'+sub+'</div>'+
+            '<div class="bud-edit-input-wrap">'+
+              '<span class="bud-edit-prefix">R$</span>'+
+              '<input type="number" class="bud-edit-input" data-sub="'+sub+'"'+
+                ' value="" placeholder="0" min="0" step="100"'+
+                ' onchange="saveBudgetField(\''+sub+'\',this.value)"'+
+                ' onblur="renderBudget()">'+
+            '</div>'+
+          '</div>'
+        ).join('')+
+        '</div>'
+      : '')+
+
+    '<div class="bud-edit-hint">Toque no valor para editar. Valores por mês.</div>'+
+    '</div>';
+
+  document.getElementById('budget-content').innerHTML = html;
+}
+
+function saveBudgetField(sub, val) {
+  const bud = getBudget();
+  const v = parseFloat(val) || 0;
+  if (v === 0) delete bud[sub];
+  else bud[sub] = v;
+  budgetStore.save(bud);
+  // Update live BUDGET object so charts reflect immediately
+  Object.keys(BUDGET).forEach(k=>delete BUDGET[k]);
+  Object.assign(BUDGET, bud);
+  // Refresh total display
+  const totalEl = document.querySelector('.bud-edit-total');
+  if (totalEl) totalEl.textContent = fmt(Object.values(bud).reduce((a,b)=>a+b,0));
+}
+
+
+// ── CONCILIAÇÃO ───────────────────────────────────
+function renderConciliacao() {
+  const txs = STATE.txs;
+  const el = document.getElementById('concil-content');
+  if (!el) return;
+
+  // ── 1. Por fonte ──
+  const sources = {};
+  txs.forEach(t => {
+    const src = t.source || 'outro';
+    if (!sources[src]) sources[src] = { count:0, total:0 };
+    sources[src].count++;
+    sources[src].total += parseFloat(t.val) || 0;
+  });
+
+  // ── 2. Por mês ──
+  const byMonth = {};
+  txs.forEach(t => {
+    const m = t.date ? t.date.slice(0,7) : 'sem data';
+    if (!byMonth[m]) byMonth[m] = { count:0, total:0 };
+    byMonth[m].count++;
+    byMonth[m].total += parseFloat(t.val) || 0;
+  });
+
+  // ── 3. Sem categoria ──
+  const uncat = txs.filter(t => t.sub === 'NÃO CATEGORIZADO');
+  const uncatTotal = uncat.reduce((s,t) => s + (parseFloat(t.val)||0), 0);
+
+  // ── 4. Duplicatas suspeitas (mesmo val + desc similar, datas próximas) ──
+  const suspicious = [];
+  for (let i = 0; i < txs.length; i++) {
+    for (let j = i+1; j < txs.length; j++) {
+      const a = txs[i], b = txs[j];
+      if (Math.abs((parseFloat(a.val)||0) - (parseFloat(b.val)||0)) > 0.01) continue;
+      if (!a.date || !b.date) continue;
+      const dayDiff = Math.abs(new Date(a.date) - new Date(b.date)) / 86400000;
+      if (dayDiff > 5) continue;
+      const descA = a.desc.slice(0,15).toUpperCase();
+      const descB = b.desc.slice(0,15).toUpperCase();
+      if (descA === descB && !suspicious.find(p => p.a.id===a.id || p.b.id===b.id)) {
+        suspicious.push({a, b});
+      }
+    }
+  }
+
+  const totalGeral = txs.reduce((s,t) => s + (parseFloat(t.val)||0), 0);
+  const MONTH_NAMES = {
+    '2026-01':'Janeiro','2026-02':'Fevereiro','2026-03':'Março',
+    '2026-04':'Abril','2026-05':'Maio','2026-06':'Junho',
+    '2026-07':'Julho','2026-08':'Agosto','2026-09':'Setembro',
+    '2026-10':'Outubro','2026-11':'Novembro','2026-12':'Dezembro',
+  };
+  const SRC_LABEL = {
+    'itau':'Itaú (conta)', 'unicred':'Unicred (conta)',
+    'card':'Cartão Itaú', 'card_unicred':'Cartão Unicred',
+    'excel':'Excel / Planilha', 'manual':'Manual', 'outro':'Outros'
+  };
+
+  let html = '<div class="concil-wrap">';
+
+  // ── CARD: Resumo geral ──
+  html += '<div class="concil-card">'+
+    '<div class="concil-card-title">Resumo Geral</div>'+
+    '<div class="concil-row concil-total">'+
+      '<span>Total importado</span>'+
+      '<span>'+fmt(totalGeral)+'</span>'+
+    '</div>'+
+    '<div class="concil-row">'+
+      '<span>Lançamentos</span>'+
+      '<span>'+txs.length+'</span>'+
+    '</div>'+
+    '<div class="concil-row">'+
+      '<span>Período</span>'+
+      '<span>'+(Object.keys(byMonth).filter(m=>m.startsWith('2026')).length)+' meses em 2026</span>'+
+    '</div>'+
+    (uncatTotal>0
+      ? '<div class="concil-row concil-warn">'+
+          '<span>⚠ Sem categoria ('+uncat.length+' lanç.)</span>'+
+          '<span>'+fmt(uncatTotal)+'</span>'+
+        '</div>'
+      : '<div class="concil-row concil-ok"><span>✓ Tudo categorizado</span><span></span></div>')+
+  '</div>';
+
+  // ── CARD: Por fonte ──
+  const srcEntries = Object.entries(sources).sort((a,b)=>b[1].total-a[1].total);
+  html += '<div class="concil-card">'+
+    '<div class="concil-card-title">Por Fonte</div>'+
+    srcEntries.map(([src, d]) =>
+      '<div class="concil-row">'+
+        '<div>'+
+          '<div class="concil-row-name">'+(SRC_LABEL[src]||src)+'</div>'+
+          '<div class="concil-row-sub">'+d.count+' lançamentos</div>'+
+        '</div>'+
+        '<div class="concil-row-val">'+fmt(d.total)+'</div>'+
+      '</div>'
+    ).join('')+
+  '</div>';
+
+  // ── CARD: Por mês ──
+  const monthEntries = Object.entries(byMonth).sort((a,b)=>a[0].localeCompare(b[0]));
+  html += '<div class="concil-card">'+
+    '<div class="concil-card-title">Por Mês</div>'+
+    monthEntries.map(([m, d]) =>
+      '<div class="concil-row">'+
+        '<div>'+
+          '<div class="concil-row-name">'+(MONTH_NAMES[m]||m)+'</div>'+
+          '<div class="concil-row-sub">'+d.count+' lançamentos</div>'+
+        '</div>'+
+        '<div class="concil-row-val">'+fmt(d.total)+'</div>'+
+      '</div>'
+    ).join('')+
+  '</div>';
+
+  // ── CARD: Possíveis duplicatas ──
+  html += '<div class="concil-card">'+
+    '<div class="concil-card-title">Possíveis Duplicatas '+
+      (suspicious.length > 0
+        ? '<span class="concil-badge-warn">'+suspicious.length+'</span>'
+        : '<span class="concil-badge-ok">0</span>')+
+    '</div>'+
+    (suspicious.length === 0
+      ? '<div class="concil-empty">Nenhuma duplicata detectada</div>'
+      : suspicious.slice(0,10).map(({a,b}) =>
+          '<div class="concil-dupe">'+
+            '<div class="concil-dupe-header">'+
+              '<span class="concil-dupe-val">'+fmt(parseFloat(a.val))+'</span>'+
+              '<span class="concil-dupe-dates">'+a.date+' · '+b.date+'</span>'+
+            '</div>'+
+            '<div class="concil-dupe-desc" onclick="openEditTx(\''+a.id+'\')">'+a.desc.slice(0,45)+'</div>'+
+            '<div class="concil-dupe-desc" onclick="openEditTx(\''+b.id+'\')">'+b.desc.slice(0,45)+'</div>'+
+          '</div>'
+        ).join(''))+
+  '</div>';
+
+  // ── CARD: O que pode ter ficado de fora ──
+  html += '<div class="concil-card concil-card-info">'+
+    '<div class="concil-card-title">O que pode ter ficado de fora</div>'+
+    '<div class="concil-info-row">Créditos e estornos (valores ≤ 0) são ignorados na importação</div>'+
+    '<div class="concil-info-row">Linhas sem formato de data dd/mm/aaaa são puladas</div>'+
+    '<div class="concil-info-row">Transações similares detectadas como duplicata são bloqueadas</div>'+
+    '<div class="concil-info-row">Arquivos não importados simplesmente não existem no sistema</div>'+
+  '</div>';
+
+  html += '</div>';
+  el.innerHTML = html;
+}
 // ── AJUSTES ───────────────────────────────────────
 let activeAjusteTab='revisar';
 
@@ -647,7 +886,7 @@ function renderAjustes() { setAjusteTab(activeAjusteTab); }
 
 function setAjusteTab(tab) {
   activeAjusteTab=tab;
-  ['revisar','regras','import'].forEach(t=>{
+  ['revisar','regras','import','budget','concil'].forEach(t=>{
     const btn=document.getElementById('atab-'+t);
     const pane=document.getElementById('ajuste-'+t);
     if(btn) btn.classList.toggle('active',t===tab);
@@ -656,6 +895,8 @@ function setAjusteTab(tab) {
   if(tab==='revisar') { renderRevisar(); setTimeout(initSwipe,100); }
   if(tab==='regras')  renderRules();
   if(tab==='import')  renderImport();
+  if(tab==='budget')  renderBudget();
+  if(tab==='concil')  renderConciliacao();
   updateReviewBadge();
 }
 
