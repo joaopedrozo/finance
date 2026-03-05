@@ -147,6 +147,7 @@ async function loadData(silent=false) {
     if (STATE.txs.length===0) { seedData(); STATE.txs=cache.load(); }
   }
   if (!silent) showLoading(false);
+  if (STATE.txs.length === 0) { seedData(); STATE.txs = cache.load(); }
   refreshAll();
 }
 
@@ -328,8 +329,35 @@ function renderHome() {
 }
 
 // ── DESPESAS ──────────────────────────────────────
-let activeMonth='01';
-let despSort='valor_desc';
+
+function openDetailCat(tipo) {
+  const txs=STATE.txs;
+  const filtered=txs.filter(t=>{
+    if(!t.date||!t.date.startsWith('2026-'+activeMonth)) return false;
+    return tipo==='fixa'?getCat(t.sub)==='Fixa':getCat(t.sub)!=='Fixa';
+  }).sort((a,b)=>parseFloat(b.val)-parseFloat(a.val));
+  const total=filtered.reduce((a,t)=>a+(parseFloat(t.val)||0),0);
+  document.getElementById('detail-title').textContent=tipo==='fixa'?'Despesas Fixas':'Despesas Variáveis';
+  document.getElementById('detail-total').textContent=fmt(total)+' · '+filtered.length+' lançamentos';
+  document.getElementById('detail-chart').innerHTML='';
+  const rev=reviewed.load();
+  const ul=document.getElementById('detail-list');
+  ul.innerHTML='';
+  filtered.forEach(t=>{
+    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'#1A8C5B':st?'#A67C2E':'#ccc';
+    const d=document.createElement('div');
+    d.className='detail-row'; d.style.cursor='pointer';
+    d.onclick=()=>openEditTx(t.id);
+    d.innerHTML='<div style="color:'+dotC+';font-size:14px;width:16px;flex-shrink:0">'+dot+'</div>'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+t.desc+'</div>'+
+        '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+t.date+' · '+t.sub+'</div>'+
+      '</div>'+
+      '<div style="font-size:12px;flex-shrink:0;margin-left:8px">'+fmt(parseFloat(t.val)||0)+'</div>';
+    ul.appendChild(d);
+  });
+  document.getElementById('detail-modal').classList.add('open');
+}
 
 function renderDespesas() {
   const txs=STATE.txs, m=parseInt(activeMonth), ag=aggregate(txs,m), total=ag.total;
@@ -498,7 +526,7 @@ function renderCmpAnual(txs) {
   if(sc==='alpha') entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
   else if(sc==='budget') entries.sort((a,b)=>desc?((BUDGET[b[0]]||0)*12)-((BUDGET[a[0]]||0)*12):((BUDGET[a[0]]||0)*12)-((BUDGET[b[0]]||0)*12));
   else if(sc==='spent') entries.sort((a,b)=>desc?b[1]-a[1]:a[1]-b[1]);
-  else if(sc==='saldo'){const sa=(BUDGET[a]||0)*12-a,sb=(BUDGET[b]||0)*12-b;entries.sort((a,b)=>desc?((BUDGET[a[0]]||0)*12-a[1])-((BUDGET[b[0]]||0)*12-b[1]):(((BUDGET[b[0]]||0)*12-b[1])-((BUDGET[a[0]]||0)*12-a[1])));}
+  else if(sc==='saldo') entries.sort((a,b)=>{ const sa=(BUDGET[a[0]]||0)*12-a[1], sb=(BUDGET[b[0]]||0)*12-b[1]; return desc?sa-sb:sb-sa; });
   else if(sc==='pct') entries.sort((a,b)=>{const pa=BUDGET[a[0]]?a[1]/((BUDGET[a[0]]||0)*12):0,pb=BUDGET[b[0]]?b[1]/((BUDGET[b[0]]||0)*12):0;return desc?pb-pa:pa-pb;});
   const si=col=>{const[c2,d2]=cmpAnualSort.split('_');if(c2!==col)return'<span style="color:var(--muted);font-size:8px">↕</span>';return d2==='desc'?'↓':'↑';};
   let html='<table class="bud-table" style="width:100%"><thead><tr>'+
