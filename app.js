@@ -365,7 +365,6 @@ function openDetailCat(tipo) {
 
 function renderDespesas() {
   const txs=STATE.txs, m=parseInt(activeMonth), ag=aggregate(txs,m), total=ag.total;
-
   document.getElementById('month-pills').innerHTML=
     ['01','02','03','04','05','06','07','08','09','10','11','12']
     .map(mo=>'<div class="pill '+(mo===activeMonth?'active':'')+'" onclick="setMonth(\''+mo+'\')">'+MNAMES[parseInt(mo)-1]+'</div>').join('');
