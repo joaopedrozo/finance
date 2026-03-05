@@ -150,35 +150,7 @@
 
     <!-- INÍCIO -->
     <div id="screen-home" class="screen active">
-
-      <!-- Hero: acumulado + barra orçado -->
-      <div class="home-hero" id="home-hero"></div>
-
-      <!-- Top 5 categorias -->
-      <div class="section-label">Top 5 Categorias — Acumulado</div>
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-body" id="home-top5"></div>
-      </div>
-
-      <!-- Pizza top 5 + evolução lado a lado compacto -->
-      <div class="section-label">Composição · Evolução</div>
-      <div style="display:flex;gap:12px;padding:0 16px 12px">
-        <div class="card" style="flex:1;margin:0">
-          <div class="card-body" style="padding:12px" id="home-pizza"></div>
-        </div>
-        <div class="card" style="flex:1;margin:0">
-          <div class="card-body" style="padding:12px;padding-top:12px" id="home-evolucao"></div>
-        </div>
-      </div>
-
-      <!-- Mês -->
-      <div class="section-label">Por Mês</div>
-      <div class="month-pills" id="home-month-pills"></div>
-      <div id="home-month-summary"></div>
-
-      <!-- Alertas -->
-      <div id="home-alerts"></div>
-      <div style="height:8px"></div>
+      <div id="home-dashboard"></div>
     </div>
 
     <!-- DESPESAS -->
@@ -198,17 +170,9 @@
           </div>
         </div>
       </div>
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-header"><div class="card-title">Composição — 80% das despesas</div></div>
-        <div class="card-body"><div class="donut-row" id="desp-donut"></div></div>
-      </div>
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-header"><div class="card-title">Top 10 Categorias</div><div style="font-size:10px;color:var(--muted)">Toque para detalhar</div></div>
-        <div class="card-body" id="desp-table"></div>
-      </div>
       <div class="card">
-        <div class="card-header"><div class="card-title">Top 10 Lançamentos</div></div>
-        <div class="card-body" id="desp-top10-txs"></div>
+        <div class="card-header"><div class="card-title">Categorias</div><div style="font-size:10px;color:var(--muted)">Toque para expandir</div></div>
+        <div class="card-body" id="desp-table"></div>
       </div>
       <div style="height:8px"></div>
     </div>
@@ -269,16 +233,7 @@
           <div id="review-progress" style="font-size:11px;color:var(--muted);white-space:nowrap"></div>
         </div>
         <div class="review-card" id="review-card"></div>
-        <div style="padding:0 16px 8px">
-          <div class="select-row">
-            <div class="select-label">Subcategoria</div>
-            <select id="review-select" onchange="onReviewSubChange()"></select>
-          </div>
-          <div class="select-row" style="margin-top:8px">
-            <div class="select-label">Tipo</div>
-            <select id="review-cat"><option value="Fixa">Fixa</option><option value="Variáveis">Variável</option></select>
-          </div>
-        </div>
+
         <div style="display:flex;gap:10px;padding:0 16px 8px">
           <button class="btn btn-ghost" style="flex:1;margin:0;padding:12px" onclick="rejectCard()">✎ Corrigir</button>
           <button class="btn" style="flex:2;margin:0;padding:12px;background:var(--green);border:none" onclick="approveCard()">✓ Aprovado</button>
@@ -296,6 +251,13 @@
         <div style="font-size:12px;color:var(--muted)">Todos os lançamentos foram aprovados ou corrigidos</div>
         <button class="btn" style="margin-top:24px" onclick="showScreen('home')">Voltar ao início</button>
       </div>
+      <div style="height:8px"></div>
+    </div>
+
+    <!-- REGRAS -->
+    <div id="screen-regras" class="screen">
+      <div class="section-label">Regras de Categorização</div>
+      <div id="rules-content"></div>
       <div style="height:8px"></div>
     </div>
 
@@ -335,8 +297,31 @@
       <div class="nav-icon">✓</div><div>Revisar</div>
       <div id="review-badge" style="display:none;position:absolute;top:6px;right:12px;width:16px;height:16px;background:#D63E50;border-radius:50%;font-size:9px;color:#fff;align-items:center;justify-content:center;font-weight:700"></div>
     </div>
+    <div class="nav-item" id="nav-regras" onclick="showScreen('regras')">
+      <div class="nav-icon">⚙</div><div>Regras</div>
+    </div>
     <div class="nav-item" id="nav-import" onclick="showScreen('import')">
       <div class="nav-icon">↑</div><div>Importar</div>
+    </div>
+  </div>
+
+  <!-- SEARCH MODAL -->
+  <div class="modal-overlay" id="search-modal">
+    <div class="modal" style="max-height:85dvh;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <input id="search-input" type="text" placeholder="Buscar descrição, categoria, valor..."
+          oninput="runSearch()"
+          style="flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:10px;
+                 font-size:14px;background:var(--s2);color:var(--text);font-family:inherit">
+        <span class="modal-close" onclick="closeSearch()">×</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap" id="search-filters">
+        <button class="sort-pill active" onclick="setSearchFilter('all')">Todos</button>
+        <button class="sort-pill" onclick="setSearchFilter('month')">Este mês</button>
+        <button class="sort-pill" onclick="setSearchFilter('uncat')">Sem categoria</button>
+      </div>
+      <div id="search-summary" style="font-size:11px;color:var(--muted);margin-bottom:8px"></div>
+      <div id="search-results" style="overflow-y:auto;flex:1"></div>
     </div>
   </div>
 

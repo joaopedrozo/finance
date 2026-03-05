@@ -62,13 +62,62 @@ const ALL_SUBS = ['ALIMENTAÇÃO','APTO','ASSINATURAS','BELEZA ESTÉTICA BEM EST
   'FUNCIONÁRIAS','IMPOSTOS','LAVANDERIA','LAZER','LUZ','MORADIA','NÃO CATEGORIZADO',
   'PRESENTES','PREVIDENCIA /  VIDA','RICARDO','SAÚDE','SEGUROS','SUPERMERCADO','TRANSPORTE','VIAGEM'];
 
+// ── USER RULES (localStorage) ─────────────────────────
+const USER_RULES_KEY = 'jcrp_user_rules';
+const userRules = {
+  load() { try { return JSON.parse(localStorage.getItem(USER_RULES_KEY)||'[]'); } catch { return []; } },
+  save(r) { localStorage.setItem(USER_RULES_KEY, JSON.stringify(r)); },
+  add(kw, sub) {
+    const rules = this.load();
+    const cat = getCat(sub);
+    // Remove existing rule with same keyword
+    const filtered = rules.filter(r => r.kw.toUpperCase() !== kw.toUpperCase());
+    filtered.unshift({kw: kw.toUpperCase(), cat, sub});
+    this.save(filtered);
+  },
+  remove(kw) {
+    const rules = this.load().filter(r => r.kw.toUpperCase() !== kw.toUpperCase());
+    this.save(rules);
+  }
+};
+
 function categorize(desc, type) {
   const d = desc.toUpperCase();
+
+  // 1. User rules take priority
+  for (const r of userRules.load()) {
+    if (d.includes(r.kw)) return {cat:r.cat, sub:r.sub, pessoa:null};
+  }
+
+  // 2. Built-in rules
   const rules = type==='itau'?RULES_ITAU:type==='unicred'?RULES_UNICRED:RULES_CARD;
   for (const [kw,cat,sub,pessoa] of rules) {
     if (new RegExp(kw.toUpperCase()).test(d)) return {cat,sub,pessoa};
   }
   return {cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:null};
+}
+
+// ── APPLY USER RULES TO EXISTING TXS ──────────────────
+function applyUserRulesToAll() {
+  const rules = userRules.load();
+  if (!rules.length) return 0;
+  let changed = 0;
+  STATE.txs = STATE.txs.map(t => {
+    if (t.sub !== 'NÃO CATEGORIZADO') return t;
+    const d = t.desc.toUpperCase();
+    for (const r of rules) {
+      if (d.includes(r.kw)) {
+        changed++;
+        return {...t, sub:r.sub, cat:r.cat};
+      }
+    }
+    return t;
+  });
+  if (changed > 0) {
+    cache.save(STATE.txs);
+    if (isConfigured()) sheetsPost({action:'addTxs', txs:STATE.txs.filter(t=>t.sub!=='NÃO CATEGORIZADO')}).catch(()=>{});
+  }
+  return changed;
 }
 
 const BUDGET = {
@@ -266,1176 +315,118 @@ function refreshAll() {
   if (active==='comparativo') renderComparativo();
   if (active==='patrimonio')  renderPatrimonio();
   if (active==='revisar')     renderRevisar();
+  if (active==='regras')      renderRules();
 }
 
 // ── HOME ──────────────────────────────────────────────
 function renderHome() {
-  const txs=STATE.txs;
-  const months=[...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].sort();
-  const nMonths=months.length;
-  const acum=txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
-  const budMensal=Object.values(BUDGET).reduce((a,b)=>a+b,0);
-  const budAcum=budMensal*nMonths;
-  const pctBudget=budAcum?((acum/budAcum)*100).toFixed(0):'—';
-  const saldo=budAcum-acum;
-  const overBudget=acum>budAcum;
-  const rev=reviewed.load(), pending=txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=threshold.get()).length;
-
-  // ── HERO ──
-  document.getElementById('home-hero').innerHTML=`
-    <div class="hero-main">
-      <div class="hero-label">Acumulado 2026 · ${nMonths} ${nMonths===1?'mês':'meses'}</div>
-      <div class="hero-value">${fmt(acum)}</div>
-      <div class="hero-budget-row">
-        <div class="hero-budget-track">
-          <div class="hero-budget-fill ${overBudget?'over':''}" style="width:${Math.min(parseFloat(pctBudget),100)}%"></div>
-        </div>
-        <div class="hero-budget-nums">
-          <span class="${overBudget?'hero-over':'hero-ok'}">${pctBudget}% utilizado</span>
-          <span class="hero-saldo">${overBudget?'estouro':'saldo'} ${fmtK(Math.abs(saldo))}</span>
-        </div>
-      </div>
-    </div>
-    <div class="hero-row">
-      ${months.map((ym,i)=>{
-        const m=parseInt(ym.slice(5));
-        const ag=aggregate(txs,m);
-        const bud=budMensal, over=ag.total>bud;
-        return `<div class="hero-mini" onclick="selectHomeMonth('${String(m).padStart(2,'0')}')">
-          <div class="hero-mini-label">${MNAMES[m-1]}</div>
-          <div class="hero-mini-val ${over?'hero-mini-over':''}">${fmt(ag.total)}</div>
-        </div>${i<months.length-1?'<div class="hero-divider"></div>':''}`;
-      }).join('')}
-    </div>`;
-
-  // ── TOP 5 CATEGORIAS ──
-  const allSubs={};
-  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
-  const top5=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const maxV=top5[0]?.[1]||1;
-  document.getElementById('home-top5').innerHTML=top5.map(([name,val],i)=>{
-    const bud=BUDGET[name], over=bud&&val>bud*nMonths;
-    const pct=(val/acum*100).toFixed(0);
-    return `<div class="htop-row" onclick="openDetail('${name}')">
-      <div class="htop-dot" style="background:${COLORS[i]}"></div>
-      <div class="htop-name">${name}</div>
-      <div class="htop-bar-wrap">
-        <div class="htop-bar" style="width:${(val/maxV*100).toFixed(1)}%;background:${over?'var(--red)':COLORS[i]}"></div>
-      </div>
-      <div class="htop-val ${over?'prog-over':''}">${fmtK(val)}</div>
-      <div class="htop-pct">${pct}%</div>
-    </div>`;
-  }).join('');
-
-  // ── PIZZA top 5 only ──
-  renderHomePizza(txs);
-
-  // ── EVOLUÇÃO ──
-  const byM=byMonthTotals(txs);
-  document.getElementById('home-evolucao').innerHTML=monthBarChart(byM,budMensal);
-
-  // ── MÊS PILLS ──
-  renderHomeMonthPills();
-  renderMonthSummary();
-
-  // ── ALERTAS ──
-  const alerts=[];
-  if (pending>0) alerts.push({type:'warn',title:`${pending} lançamento${pending>1?'s':''} para revisar`,body:'Toque em Revisar na barra inferior'});
-  const overCats=top5.filter(([n,v])=>BUDGET[n]&&v>BUDGET[n]*nMonths);
-  overCats.forEach(([n,v])=>alerts.push({type:'danger',title:`${n} acima do orçado`,body:`${fmt(v)} vs ${fmt(BUDGET[n]*nMonths)} orçado`}));
-  if(alerts.length===0) alerts.push({type:'ok',title:'Tudo dentro do orçado',body:'Nenhum alerta no momento'});
-  document.getElementById('home-alerts').innerHTML=alerts.map(a=>`
-    <div class="alert-item ${a.type}">
-      <div class="alert-title">${a.title}</div>
-      <div class="alert-body">${a.body}</div>
-    </div>`).join('');
-}
-
-// ── HOME MONTH SUMMARY ───────────────────────────────
-let homeMonth = null;
-
-function selectHomeMonth(m) {
-  homeMonth = homeMonth === m ? null : m; // toggle
-  renderHomeMonthPills();
-  renderMonthSummary();
-}
-
-function renderHomeMonthPills() {
-  const hasTxs = (m) => STATE.txs.some(t => t.date && t.date.startsWith(`2026-${m}`));
-  document.getElementById('home-month-pills').innerHTML =
-    ['01','02','03','04','05','06','07','08','09','10','11','12'].map(m => {
-      const has = hasTxs(m);
-      const active = m === homeMonth;
-      return `<div class="pill ${active?'active':''} ${!has?'pill-empty':''}"
-        onclick="selectHomeMonth('${m}')">${MNAMES[parseInt(m)-1]}</div>`;
-    }).join('');
-}
-
-function renderMonthSummary() {
-  const el = document.getElementById('home-month-summary');
-  if (!homeMonth) { el.innerHTML=''; return; }
-
   const txs = STATE.txs;
-  const ag  = aggregate(txs, parseInt(homeMonth));
-  const fixa = ag.fixaM[homeMonth]||0;
-  const vari = ag.varM[homeMonth]||0;
-  const top3 = Object.entries(ag.bySub)
-    .filter(([k])=>k!=='NÃO CATEGORIZADO')
-    .sort((a,b)=>b[1]-a[1]).slice(0,3);
-  const mName = MNAMES[parseInt(homeMonth)-1];
-
-  if (ag.total === 0) {
-    el.innerHTML=`<div class="month-summary-card">
-      <div style="text-align:center;padding:16px;color:var(--muted);font-size:12px">Sem dados para ${mName}</div>
-    </div>`;
-    return;
-  }
-
-  el.innerHTML=`<div class="month-summary-card">
-    <div class="msm-header">
-      <div>
-        <div class="msm-month">${mName} 2026</div>
-        <div class="msm-total">${fmt(ag.total)}</div>
-      </div>
-      <div style="display:flex;gap:8px">
-        <button class="btn" style="margin:0;padding:8px 14px;font-size:12px;flex:1"
-          onclick="goToMonth('${homeMonth}')">Ver detalhes →</button>
-        <button class="btn" style="margin:0;padding:8px 14px;font-size:12px;flex:1;background:#1A2F5A"
-          onclick="gerarResumoPNG('${homeMonth}')">📤 Compartilhar</button>
-      </div>
-    </div>
-    <div class="msm-row">
-      <div class="msm-kpi">
-        <div class="msm-kpi-label">Fixas</div>
-        <div class="msm-kpi-val" style="color:var(--blue)">${fmt(fixa)}</div>
-        <div class="msm-kpi-pct">${pctOf(fixa,ag.total)}</div>
-      </div>
-      <div class="msm-kpi">
-        <div class="msm-kpi-label">Variáveis</div>
-        <div class="msm-kpi-val" style="color:var(--gold)">${fmt(vari)}</div>
-        <div class="msm-kpi-pct">${pctOf(vari,ag.total)}</div>
-      </div>
-    </div>
-    <div class="msm-top">
-      <div class="msm-top-label">Top categorias</div>
-      ${top3.map(([name,val],i)=>`
-        <div class="msm-top-row">
-          <div class="msm-top-dot" style="background:${COLORS[i]}"></div>
-          <div class="msm-top-name">${name}</div>
-          <div class="msm-top-val">${fmt(val)}</div>
-          <div class="msm-top-pct">${pctOf(val,ag.total)}</div>
-        </div>`).join('')}
-    </div>
-  </div>`;
-}
-
-function goToMonth(m) {
-  activeMonth = m;
-  showScreen('despesas');
-}
-
-// ── DESPESAS ──────────────────────────────────────────
-let activeMonth='01';
-let despSort = 'valor_desc';
-
-function openDetailCat(tipo) {
-  const txs = STATE.txs, m = parseInt(activeMonth);
-  const filtered = txs.filter(t => {
-    if (!t.date || !t.date.startsWith(`2026-${activeMonth}`)) return false;
-    if (tipo==='fixa') return getCat(t.sub)==='Fixa';
-    return getCat(t.sub)!=='Fixa';
-  });
-  const total = filtered.reduce((a,t)=>a+(parseFloat(t.val)||0),0);
-  const label = tipo==='fixa'?'Despesas Fixas':'Despesas Variáveis';
-  // Reuse detail modal
-  document.getElementById('detail-title').textContent = label;
-  document.getElementById('detail-total').textContent = fmt(total)+' · '+filtered.length+' lançamentos';
-  document.getElementById('detail-chart').innerHTML = '';
+  const months = [...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].sort();
+  const nMonths = months.length || 1;
+  const acum = txs.reduce((s,t)=>s+(parseFloat(t.val)||0), 0);
+  const budMensal = Object.values(BUDGET).reduce((a,b)=>a+b, 0);
+  const budAcum = budMensal * nMonths;
+  const pctUsado = budAcum ? Math.min((acum/budAcum)*100, 999) : 0;
+  const saldo = budAcum - acum;
+  const over = acum > budAcum;
   const rev = reviewed.load();
-  document.getElementById('detail-list').innerHTML = filtered
-    .sort((a,b)=>b.val-a.val)
-    .map(t=>{
-      const st=rev[t.id], dot=st==='ok'?'✓':st?'✎':'·', dotC=st==='ok'?'#1A8C5B':st?'#A67C2E':'#ccc';
-      return `<div class="detail-row" onclick="openEditTx('${t.id}')" style="cursor:pointer">
-        <div style="color:${dotC};font-size:14px;width:16px;flex-shrink:0">${dot}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date} · ${t.sub}</div>
+  const minVal = threshold.get();
+  const pending = txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal).length;
+
+  // Top 5 categorias acumuladas
+  const allSubs = {};
+  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
+  const top5 = Object.entries(allSubs).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const maxV = top5[0]?.[1] || 1;
+
+  // Meses
+  const monthCards = months.map(ym => {
+    const m = parseInt(ym.slice(5));
+    const ag = aggregate(txs, m);
+    const ov = ag.total > budMensal;
+    return { m, ym, ag, ov };
+  });
+
+  // Evolução barras (só meses com dados)
+  const byM = byMonthTotals(txs);
+  const allMonths = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+  const barMax = Math.max(...allMonths.map(m=>byM[m]||0), budMensal, 1);
+
+  // Alertas compactos
+  const alerts = [];
+  if (pending > 0) alerts.push(`${pending} lançamento${pending>1?'s':''} acima de ${fmtK(minVal)} para revisar`);
+  top5.filter(([n,v])=>BUDGET[n]&&v>BUDGET[n]*nMonths).forEach(([n])=>alerts.push(`${n} acima do orçado`));
+
+  document.getElementById('home-dashboard').innerHTML = `
+    <div class="dash-wrap">
+
+      <!-- 1. ACUMULADO -->
+      <div class="dash-hero">
+        <div class="dash-hero-left">
+          <div class="dash-label">Acumulado 2026</div>
+          <div class="dash-total">${fmt(acum)}</div>
+          <div class="dash-sub">${nMonths} ${nMonths===1?'mês':'meses'} · ${pctUsado.toFixed(0)}% do orçado</div>
         </div>
-        <div style="font-size:12px;font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
-      </div>`;
-    }).join('');
-  document.getElementById('detail-modal').classList.add('open');
-}
+        <div class="dash-hero-right">
+          <div class="dash-saldo-label">${over?'Estouro':'Saldo'}</div>
+          <div class="dash-saldo ${over?'dash-over':''}">${over?'−':'+'} ${fmtK(Math.abs(saldo))}</div>
+        </div>
+      </div>
+      <div class="dash-prog-track">
+        <div class="dash-prog-fill ${over?'dash-prog-over':''}" style="width:${Math.min(pctUsado,100).toFixed(1)}%"></div>
+      </div>
 
-function renderDespesas() {
-  const txs=STATE.txs, m=parseInt(activeMonth), ag=aggregate(txs,m), total=ag.total;
-  document.getElementById('month-pills').innerHTML=['01','02','03','04','05','06','07','08','09','10','11','12']
-    .map(mo=>`<div class="pill ${mo===activeMonth?'active':''}" onclick="setMonth('${mo}')">${MNAMES[parseInt(mo)-1]}</div>`).join('');
+      <!-- 2. MESES -->
+      <div class="dash-months">
+        ${monthCards.map(({m,ag,ov})=>`
+          <div class="dash-month-card ${ov?'dash-month-over':''}" onclick="showScreen('despesas');setMonth('${String(m).padStart(2,'0')}')">
+            <div class="dash-month-name">${MNAMES[m-1]}</div>
+            <div class="dash-month-val">${fmtK(ag.total)}</div>
+            <div class="dash-month-sub">${ov?'▲ estouro':'▼ ok'}</div>
+          </div>`).join('<div class="dash-month-div"></div>')}
+      </div>
 
-  const entries=Object.entries(ag.bySub).filter(([k])=>k!=='NÃO CATEGORIZADO');
-  let sorted;
-  if      (despSort==='valor_desc') sorted=[...entries].sort((a,b)=>b[1]-a[1]);
-  else if (despSort==='valor_asc')  sorted=[...entries].sort((a,b)=>a[1]-b[1]);
-  else if (despSort==='alpha')      sorted=[...entries].sort((a,b)=>a[0].localeCompare(b[0]));
-  else if (despSort==='budget_pct') sorted=[...entries].sort((a,b)=>{
-    const pa=BUDGET[a[0]]?a[1]/BUDGET[a[0]]:0;
-    const pb=BUDGET[b[0]]?b[1]/BUDGET[b[0]]:0;
-    return pb-pa;
-  });
-  const maxVal=sorted[0]?.[1]||1;
-  document.getElementById('desp-table').innerHTML=sorted.length
-    ? sorted.map(([name,val],i)=>{
-        const bud=BUDGET[name], over=bud&&val>bud;
-        const barC=bud?(over?'#D63E50':'#1E9E63'):COLORS[i%COLORS.length];
-        return `<div class="cat-row" onclick="openDetail('${name}')">
-          <div class="cat-dot" style="background:${COLORS[i%COLORS.length]}"></div>
-          <div class="cat-name">${name}</div>
-          <div class="cat-right">
-            <div class="cat-val ${bud?(over?'prog-over':'prog-ok'):''}">${fmt(val)}</div>
-            <div class="cat-pct">${pctOf(val,total)}${bud?' · bud '+fmtK(bud):''}</div>
-            <div class="cat-bar-wrap" style="width:70px"><div class="cat-bar" style="width:${(val/maxVal*100).toFixed(1)}%;background:${barC}"></div></div>
-          </div>
-        </div>`;
-      }).join('')
-    : '<div style="padding:24px;text-align:center;color:var(--muted)">Sem dados para este mês</div>';
+      <!-- 3. TOP 5 -->
+      <div class="dash-section-label">Top 5 Categorias</div>
+      <div class="dash-top5">
+        ${top5.map(([name,val],i)=>{
+          const bud = BUDGET[name];
+          const ov = bud && val > bud * nMonths;
+          return `<div class="dash-cat-row" onclick="showScreen('despesas')">
+            <div class="dash-cat-dot" style="background:${COLORS[i]}"></div>
+            <div class="dash-cat-name">${name}</div>
+            <div class="dash-cat-bar-wrap">
+              <div class="dash-cat-bar" style="width:${(val/maxV*100).toFixed(1)}%;background:${ov?'var(--red)':COLORS[i]}"></div>
+            </div>
+            <div class="dash-cat-val ${ov?'dash-over':''}">${fmtK(val)}</div>
+          </div>`;
+        }).join('')}
+      </div>
 
-  const fixa=ag.fixaM[activeMonth]||0, vari=ag.varM[activeMonth]||0;
-  document.getElementById('desp-kpi-total').textContent=fmt(total);
-  document.getElementById('desp-kpi-fixa').textContent=fmt(fixa)+' ('+pctOf(fixa,total)+')';
-  document.getElementById('desp-kpi-var').textContent=fmt(vari)+' ('+pctOf(vari,total)+')';
-}
-function setMonth(m) { activeMonth=m; renderDespesas(); }
-function toggleCatRow(id, name) {
-  const el = document.getElementById(id);
-  const idx = id.replace('catrow-','');
-  const arrow = document.getElementById('arrow-'+idx);
-  if (!el) return;
-  const open = el.style.display === 'block';
-  el.style.display = open ? 'none' : 'block';
-  if (arrow) arrow.style.transform = open ? '' : 'rotate(180deg)';
-}
+      <!-- 4. EVOLUÇÃO -->
+      <div class="dash-section-label">Evolução</div>
+      <div class="dash-bars">
+        ${allMonths.map((mo,i)=>{
+          const v = byM[mo]||0;
+          const h = v>0 ? Math.max((v/barMax*100),4) : 0;
+          const ov = v > budMensal;
+          const active = v > 0;
+          return `<div class="dash-bar-col" onclick="${active?`showScreen('despesas');setMonth('${mo}')`:''}" style="${active?'cursor:pointer':''}">
+            <div class="dash-bar-wrap">
+              <div class="dash-budget-line" style="bottom:${(budMensal/barMax*100).toFixed(1)}%"></div>
+              <div class="dash-bar-fill ${ov?'dash-bar-over':active?'dash-bar-active':'dash-bar-empty'}" style="height:${h.toFixed(1)}%"></div>
+            </div>
+            <div class="dash-bar-lbl">${MNAMES[i].slice(0,1)}</div>
+          </div>`;
+        }).join('')}
+      </div>
 
-function setDespSort(col) {
-  if (col==='valor') {
-    despSort = despSort==='valor_desc' ? 'valor_asc' : 'valor_desc';
-  } else {
-    despSort = col;
-  }
-  renderDespesas();
-}
+      <!-- 5. ALERTAS -->
+      ${alerts.length?`<div class="dash-alerts">${alerts.map(a=>`<div class="dash-alert-item">⚠ ${a}</div>`).join('')}</div>`:''}
 
-// ── COMPARATIVO ───────────────────────────────────────
-let cmpView = 'mensal'; // 'mensal' | 'anual'
-
-function renderComparativo() {
-  const txs=STATE.txs;
-  const byM=byMonthTotals(txs);
-  document.getElementById('cmp-barchart').innerHTML=monthBarChart(byM,null);
-
-  // Toggle buttons
-  document.getElementById('cmp-toggle-mensal').classList.toggle('active', cmpView==='mensal');
-  document.getElementById('cmp-toggle-anual').classList.toggle('active',  cmpView==='anual');
-
-  if (cmpView==='mensal') renderCmpMensal(txs);
-  else                    renderCmpAnual(txs);
-
-  const jan=aggregate(txs,1), fev=aggregate(txs,2);
-  const fixaA=(jan.fixaM['01']||0)+(fev.fixaM['02']||0);
-  const varA=(jan.varM['01']||0)+(fev.varM['02']||0);
-  const totA=fixaA+varA;
-  const segs=[{label:'Fixas',v:fixaA,c:'#2F6FE0'},{label:'Variáveis',v:varA,c:'#A67C2E'}];
-  document.getElementById('cmp-donut').innerHTML=`<div class="donut-row">${donutSVG(segs)}
-    <div class="donut-legend-v">${segs.map(s=>`
-      <div class="donut-leg-item"><div class="donut-leg-dot" style="background:${s.c}"></div>
-      <div class="donut-leg-name">${s.label}</div><div class="donut-leg-val">${fmt(s.v)}</div>
-      <div class="donut-leg-pct">${pctOf(s.v,totA)}</div></div>`).join('')}
-    </div></div>`;
-}
-
-function setCmpView(v) { cmpView=v; renderComparativo(); }
-
-let cmpMensalSort = 'total_desc';
-let cmpAnualSort  = 'spent_desc';
-
-function renderCmpMensal(txs) {
-  const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
-  const allSubs={};
-  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') {
-    if (!allSubs[t.sub]) allSubs[t.sub]={};
-    const m=t.date?t.date.slice(5,7):'00';
-    allSubs[t.sub][m]=(allSubs[t.sub][m]||0)+(parseFloat(t.val)||0);
-  }});
-
-  const activeMths=months.filter(m=>Object.values(allSubs).some(mv=>mv[m]));
-
-  let entries=Object.entries(allSubs);
-  const getTotal=([,mv])=>Object.values(mv).reduce((x,y)=>x+y,0);
-
-  // Sort by column
-  const [sortCol, sortDir] = cmpMensalSort.split('_');
-  const desc = sortDir==='desc';
-  if (sortCol==='alpha')  entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
-  else if (sortCol==='budget') entries.sort((a,b)=>desc?(BUDGET[b[0]]||0)-(BUDGET[a[0]]||0):(BUDGET[a[0]]||0)-(BUDGET[b[0]]||0));
-  else if (sortCol==='total')  entries.sort((a,b)=>desc?getTotal(b)-getTotal(a):getTotal(a)-getTotal(b));
-  else if (sortCol==='pct')    entries.sort((a,b)=>{
-    const pa=BUDGET[a[0]]?getTotal(a)/BUDGET[a[0]]:0;
-    const pb=BUDGET[b[0]]?getTotal(b)/BUDGET[b[0]]:0;
-    return desc?pb-pa:pa-pb;
-  });
-  else {
-    // Sort by specific month column e.g. 'month01'
-    const mo=sortCol.replace('month','');
-    entries.sort((a,b)=>desc?(b[1][mo]||0)-(a[1][mo]||0):(a[1][mo]||0)-(b[1][mo]||0));
-  }
-
-  const si=(col)=>{
-    const [sc,sd]=cmpMensalSort.split('_');
-    if(sc!==col) return '<span style="color:var(--muted);font-size:8px">↕</span>';
-    return sd==='desc'?'↓':'↑';
-  };
-
-  const CAT_W=108, BUD_W=54, M_W=54, TOT_W=60, PCT_W=44;
-
-  let html=`<div class="cmp-scroll-wrap"><table class="bud-table">
-    <colgroup>
-      <col style="width:${CAT_W}px;min-width:${CAT_W}px">
-      <col style="width:${BUD_W}px;min-width:${BUD_W}px">
-      ${activeMths.map(m=>`<col style="width:${M_W}px;min-width:${M_W}px">`).join('')}
-      <col style="width:${TOT_W}px;min-width:${TOT_W}px">
-      <col style="width:${PCT_W}px;min-width:${PCT_W}px">
-    </colgroup>
-    <thead><tr>
-      <th class="bud-cat th-sort" onclick="setCmpMensalSort('alpha')">Cat ${si('alpha')}</th>
-      <th class="bud-bud th-sort" onclick="setCmpMensalSort('budget')">Orç ${si('budget')}</th>
-      ${activeMths.map(m=>`<th class="bud-m th-sort" onclick="setCmpMensalSort('month${m}')">${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][parseInt(m)-1]} ${si('month'+m)}</th>`).join('')}
-      <th class="bud-tot th-sort" onclick="setCmpMensalSort('total')">Total ${si('total')}</th>
-      <th class="bud-m th-sort"  onclick="setCmpMensalSort('pct')">% ${si('pct')}</th>
-    </tr></thead><tbody>`;
-
-  entries.forEach(([sub,byMonth])=>{
-    const bud=BUDGET[sub]||0;
-    const total=Object.values(byMonth).reduce((a,b)=>a+b,0);
-    const pct=bud?(total/bud*100).toFixed(0):null;
-    const over=bud&&total>bud;
-    html+=`<tr onclick="openDetail('${sub}')">
-      <td class="bud-cat">${sub}</td>
-      <td class="bud-bud" style="text-align:right;color:var(--muted)">${bud?fmtK(bud):'—'}</td>
-      ${activeMths.map(m=>{
-        const v=byMonth[m]||0;
-        const ov=bud&&v>bud;
-        return `<td class="bud-m ${ov?'cell-over':v>0?'cell-ok':'cell-empty'}" style="text-align:right">${v>0?fmtK(v):'—'}</td>`;
-      }).join('')}
-      <td class="bud-tot" style="text-align:right;color:${over?'var(--red)':'var(--text)'}">${fmtK(total)}</td>
-      <td class="bud-m" style="text-align:right">
-        ${pct?`<span style="font-size:10px;font-weight:600;color:${over?'var(--red)':parseInt(pct)>80?'#C07010':'var(--green)'}">${pct}%</span>`:'—'}
-      </td>
-    </tr>`;
-  });
-
-  html+=`</tbody></table></div>`;
-  document.getElementById('cmp-rows').innerHTML=html;
-}
-
-function setCmpMensalSort(col) {
-  const [sc] = cmpMensalSort.split('_');
-  cmpMensalSort = sc===col
-    ? cmpMensalSort.endsWith('_desc') ? col+'_asc' : col+'_desc'
-    : col+'_desc';
-  renderCmpMensal(STATE.txs);
-}
-
-function renderCmpAnual(txs) {
-  const nMonths=[...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].length||1;
-  const allSubs={};
-  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO')
-    allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0);
-  });
-
-  let entries=Object.entries(allSubs);
-  const [sc,sd]=cmpAnualSort.split('_'); const desc=sd==='desc';
-  if      (sc==='alpha')  entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
-  else if (sc==='budget') entries.sort((a,b)=>desc?((BUDGET[b[0]]||0)*12)-((BUDGET[a[0]]||0)*12):((BUDGET[a[0]]||0)*12)-((BUDGET[b[0]]||0)*12));
-  else if (sc==='spent')  entries.sort((a,b)=>desc?b[1]-a[1]:a[1]-b[1]);
-  else if (sc==='saldo')  entries.sort((a,b)=>{
-    const sa=(BUDGET[a[0]]||0)*12-a[1], sb=(BUDGET[b[0]]||0)*12-b[1];
-    return desc?sa-sb:sb-sa;
-  });
-  else if (sc==='pct')    entries.sort((a,b)=>{
-    const pa=BUDGET[a[0]]?a[1]/((BUDGET[a[0]]||0)*12):0;
-    const pb=BUDGET[b[0]]?b[1]/((BUDGET[b[0]]||0)*12):0;
-    return desc?pb-pa:pa-pb;
-  });
-
-  const si=(col)=>{
-    const [c2,d2]=cmpAnualSort.split('_');
-    if(c2!==col) return '<span style="color:var(--muted);font-size:8px">↕</span>';
-    return d2==='desc'?'↓':'↑';
-  };
-
-  let html=`<table class="bud-table" style="width:100%">
-    <thead><tr>
-      <th class="bud-cat th-sort" onclick="setCmpAnualSort('alpha')">Cat ${si('alpha')}</th>
-      <th class="bud-bud th-sort" onclick="setCmpAnualSort('budget')" style="text-align:right">Anual ${si('budget')}</th>
-      <th class="bud-bud th-sort" onclick="setCmpAnualSort('spent')"  style="text-align:right">Gasto ${si('spent')}</th>
-      <th class="bud-bud th-sort" onclick="setCmpAnualSort('saldo')"  style="text-align:right">Saldo ${si('saldo')}</th>
-      <th class="bud-m  th-sort"  onclick="setCmpAnualSort('pct')"    style="text-align:right">% ${si('pct')}</th>
-    </tr></thead><tbody>`;
-
-  entries.forEach(([sub,spent])=>{
-    const budA=(BUDGET[sub]||0)*12;
-    const saldo=budA-spent;
-    const pct=budA?Math.min((spent/budA*100),999):null;
-    const over=budA&&spent>budA;
-    html+=`<tr onclick="openDetail('${sub}')">
-      <td class="bud-cat">${sub}</td>
-      <td class="bud-bud" style="text-align:right;color:var(--muted)">${budA?fmtK(budA):'—'}</td>
-      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--text)'};font-weight:600">${fmtK(spent)}</td>
-      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--green)'}">${budA?(over?'−':'+')+ fmtK(Math.abs(saldo)):'—'}</td>
-      <td class="bud-m"   style="text-align:right">
-        ${pct!==null?`<span style="font-size:10px;font-weight:600;color:${over?'var(--red)':pct>80?'#C07010':'var(--green)'}">${pct.toFixed(0)}%</span>`:'—'}
-      </td>
-    </tr>`;
-  });
-
-  html+=`</tbody></table>`;
-  document.getElementById('cmp-rows').innerHTML=html;
-}
-
-function setCmpAnualSort(col) {
-  const [sc]=cmpAnualSort.split('_');
-  cmpAnualSort = sc===col
-    ? cmpAnualSort.endsWith('_desc') ? col+'_asc' : col+'_desc'
-    : col+'_desc';
-  renderCmpAnual(STATE.txs);
-}
-
-// ── PATRIMÔNIO ────────────────────────────────────────
-async function renderPatrimonio() {
-  document.getElementById('pat-donut').innerHTML='<div style="padding:24px;text-align:center;color:var(--muted);font-size:12px">Carregando...</div>';
-  document.getElementById('pat-items-liq').innerHTML='';
-  document.getElementById('pat-items-imob').innerHTML='';
-
-  let pat = null;
-  if (isConfigured()) {
-    try { pat = await sheetsGet('getPat'); } catch(e) {}
-  }
-
-  // Fallback vazio — instrui usuário a preencher no Sheets
-  if (!pat || Object.keys(pat).length===0) {
-    document.getElementById('pat-donut').innerHTML=`
-      <div style="padding:24px;text-align:center;color:var(--muted);font-size:12px;line-height:1.6">
-        Patrimônio não configurado.<br>
-        Preencha a aba <b>Patrimonio</b> no Google Sheets<br>com colunas: <b>grupo · nome · valor</b>
-      </div>`;
-    return;
-  }
-
-  const grupos = Object.keys(pat);
-  const totByGrupo = {};
-  grupos.forEach(g=>{ totByGrupo[g]=Object.values(pat[g]).reduce((a,b)=>a+b,0); });
-  const tP = Object.values(totByGrupo).reduce((a,b)=>a+b,0);
-
-  const COLORS_PAT = ['#1E9E63','#2F6FE0','#A67C2E','#7B5FD4','#D63E50'];
-  const segs = grupos.map((g,i)=>({label:g, v:totByGrupo[g], c:COLORS_PAT[i%COLORS_PAT.length]}));
-
-  document.getElementById('pat-donut').innerHTML=`<div class="donut-row">${donutSVG(segs)}
-    <div class="donut-legend-v">${segs.map(s=>`
-      <div class="donut-leg-item"><div class="donut-leg-dot" style="background:${s.c}"></div>
-      <div class="donut-leg-name">${s.label}</div><div class="donut-leg-val">${fmtK(s.v)}</div>
-      <div class="donut-leg-pct">${pctOf(s.v,tP)}</div></div>`).join('')}
-    </div></div>`;
-
-  // Render each group
-  const liqEl=document.getElementById('pat-items-liq');
-  const imobEl=document.getElementById('pat-items-imob');
-  liqEl.innerHTML=''; imobEl.innerHTML='';
-
-  grupos.forEach((g,i)=>{
-    const color=COLORS_PAT[i%COLORS_PAT.length];
-    const el=i===0?liqEl:imobEl;
-    el.innerHTML+=`<div class="pat-group-title" style="border-top:${i>0?'':'none'};margin-top:${i>0?'':'0'}">${g} · ${fmtK(totByGrupo[g])}</div>`;
-    Object.entries(pat[g]).forEach(([n,v])=>{
-      el.innerHTML+=`<div class="pat-item">
-        <div class="pat-item-dot" style="background:${color}"></div>
-        <div class="pat-item-name">${n}</div>
-        <div class="pat-item-val">${fmtK(v)}</div>
-        <div class="pat-item-pct">${pctOf(v,tP)}</div>
-      </div>`;
-    });
-  });
-}
-
-// ── REVISAR ───────────────────────────────────────────
-let reviewQueue=[], reviewIdx=0, swipeStartX=0;
-
-function renderRevisar() {
-  const rev=reviewed.load();
-  const minVal=threshold.get();
-  // Show threshold config at top
-  document.getElementById('review-threshold-val').textContent=fmt(minVal);
-  // Filter: not reviewed AND above threshold
-  reviewQueue=STATE.txs
-    .filter(t=>!rev[t.id] && (parseFloat(t.val)||0)>=minVal)
-    .sort((a,b)=>parseFloat(b.val)-parseFloat(a.val)); // highest first
-  reviewIdx=0;
-  const skipped=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)<minVal).length;
-  document.getElementById('review-skipped').textContent=
-    skipped>0?`${skipped} lançamento${skipped>1?'s':''} abaixo do limite ignorado${skipped>1?'s':''}. Edite na aba Mensal se necessário.`:'';
-  showReviewCard();
-}
-
-function setReviewThreshold() {
-  const input=document.getElementById('review-threshold-input');
-  const val=parseFloat(input.value);
-  if (!isNaN(val)&&val>=0) {
-    threshold.set(val);
-    document.getElementById('review-threshold-modal').classList.remove('open');
-    renderRevisar();
-    showToast(`Limite atualizado: ${fmt(val)}`,'ok');
-  }
-}
-function openThresholdModal() {
-  document.getElementById('review-threshold-input').value=threshold.get();
-  document.getElementById('review-threshold-modal').classList.add('open');
-}
-function closeThresholdModal() {
-  document.getElementById('review-threshold-modal').classList.remove('open');
-}
-
-function showReviewCard() {
-  const wrap=document.getElementById('review-card-wrap');
-  const done=document.getElementById('review-done');
-  if (reviewIdx>=reviewQueue.length) {
-    wrap.style.display='none'; done.style.display='flex';
-    updateReviewBadge(); return;
-  }
-  wrap.style.display='block'; done.style.display='none';
-  const t=reviewQueue[reviewIdx];
-  const total=reviewQueue.length;
-  document.getElementById('review-progress').textContent=`${reviewIdx+1} de ${total}`;
-  document.getElementById('review-prog-fill').style.width=`${(reviewIdx/Math.max(total,1)*100).toFixed(0)}%`;
-
-  const selEl=document.getElementById('review-select');
-  selEl.innerHTML=ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('');
-  const catEl=document.getElementById('review-cat');
-  if (catEl) catEl.value = t.cat||getCat(t.sub);
-
-  document.getElementById('review-card').innerHTML=`
-    <div class="rv-date">${t.date} · <span style="color:var(--muted);font-size:10px">${t.source||''}</span></div>
-    <div class="rv-desc">${t.desc}</div>
-    <div class="rv-val">${fmt(parseFloat(t.val)||0)}</div>
-    <div class="rv-sub-row">
-      <span class="rv-cat-badge ${t.cat==='Fixa'?'badge-blue':'badge-gold'}">${t.cat}</span>
-      <span class="rv-sub">${t.sub}</span>
-      ${t.pessoa?`<span class="rv-pessoa">${t.pessoa}</span>`:''}
     </div>`;
 }
 
-function approveCard() {
-  if (reviewIdx>=reviewQueue.length) return;
-  reviewed.approve(reviewQueue[reviewIdx].id);
-  animateCard('right',()=>{ reviewIdx++; showReviewCard(); });
-}
-
-function onReviewSubChange() {
-  const sub = document.getElementById('review-select').value;
-  document.getElementById('review-cat').value = getCat(sub);
-}
-
-function rejectCard() {
-  if (reviewIdx>=reviewQueue.length) return;
-  const newSub = document.getElementById('review-select').value;
-  const newCat = document.getElementById('review-cat').value;
-  const t = reviewQueue[reviewIdx];
-  STATE.txs = STATE.txs.map(tx=>tx.id===t.id?{...tx,sub:newSub,cat:newCat}:tx);
-  cache.save(STATE.txs);
-  if (isConfigured()) sheetsPost({action:'updateTx',tx:{...t,sub:newSub,cat:newCat}}).catch(()=>{});
-  reviewed.reject(t.id,newSub);
-  animateCard('left',()=>{ reviewIdx++; showReviewCard(); });
-}
-
-function skipCard() { reviewIdx++; showReviewCard(); }
-
-function animateCard(dir,cb) {
-  const card=document.getElementById('review-card');
-  card.style.transition='transform .28s ease, opacity .28s ease';
-  card.style.transform=dir==='right'?'translateX(110%) rotate(6deg)':'translateX(-110%) rotate(-6deg)';
-  card.style.opacity='0';
-  setTimeout(()=>{ card.style.transition='none'; card.style.transform=''; card.style.opacity='1'; cb(); },300);
-}
-
-function initSwipe() {
-  const card=document.getElementById('review-card-wrap');
-  if (!card) return;
-  card.addEventListener('touchstart',e=>{ swipeStartX=e.touches[0].clientX; },{passive:true});
-  card.addEventListener('touchend',e=>{
-    const dx=e.changedTouches[0].clientX-swipeStartX;
-    if (dx>70) approveCard(); else if (dx<-70) rejectCard();
-  },{passive:true});
-}
-
-// ── DETAIL MODAL ──────────────────────────────────────
-function openDetail(subName) {
-  const txs=STATE.txs.filter(t=>t.sub===subName).sort((a,b)=>b.date.localeCompare(a.date));
-  const total=txs.reduce((a,t)=>a+(parseFloat(t.val)||0),0);
-  document.getElementById('detail-title').textContent=subName;
-  document.getElementById('detail-total').textContent=fmt(total)+' · '+txs.length+' lançamentos';
-  const byM=byMonthTotals(txs);
-  document.getElementById('detail-chart').innerHTML=monthBarChart(byM, BUDGET[subName]);
-  const rev=reviewed.load();
-  document.getElementById('detail-list').innerHTML=txs.map(t=>{
-    const st=rev[t.id];
-    const dot=st==='ok'?'✓':st?'✎':'·';
-    const dotC=st==='ok'?'#1E9E63':st?'#A67C2E':'#ccc';
-    const catColor = getCat(t.sub)==='Fixa'?'var(--blue)':'var(--gold)';
-    return `<div class="detail-row" style="cursor:pointer">
-      <div style="color:${dotC};font-size:14px;width:16px;flex-shrink:0;margin-top:1px">${dot}</div>
-      <div style="flex:1;min-width:0" onclick="openEditTx('${t.id}')">
-        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date}
-          <span style="color:${catColor};margin-left:4px">${getCat(t.sub)}</span>
-          ${t.obs?' · '+t.obs:''}
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:8px">
-        <div style="font-size:12px;color:var(--text);font-feature-settings:'tnum'">${fmt(parseFloat(t.val)||0)}</div>
-        <div onclick="openSplit('${t.id}')" style="font-size:10px;color:var(--blue);cursor:pointer;padding:2px 5px;border:1px solid var(--border);border-radius:4px;white-space:nowrap">÷</div>
-      </div>
-    </div>`;
-  }).join('');
-  document.getElementById('detail-modal').classList.add('open');
-}
-function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
-
-
-
-// ── RESUMO PNG ────────────────────────────────────────
-async function gerarResumoPNG(mes) {
-  const txs   = STATE.txs;
-  const m     = parseInt(mes);
-  const mPrev = m > 1 ? m - 1 : null;
-  const ag    = aggregate(txs, m);
-  const agPrev= mPrev ? aggregate(txs, mPrev) : null;
-  const agAcum= aggregate(txs, null);
-  const mName = MNAMES[m - 1];
-  const mPrevName = mPrev ? MNAMES[mPrev-1] : null;
-
-  const fixa  = ag.fixaM[String(m).padStart(2,'0')]||0;
-  const vari  = ag.varM[String(m).padStart(2,'0')]||0;
-  const top5  = Object.entries(ag.bySub)
-    .filter(([k])=>k!=='NÃO CATEGORIZADO').sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const top5acum = Object.entries(agAcum.bySub)
-    .filter(([k])=>k!=='NÃO CATEGORIZADO').sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const maxTop = top5[0]?.[1]||1;
-  const maxAcum= top5acum[0]?.[1]||1;
-
-  // Canvas size
-  const W=800, H=1380;
-  const canvas=document.createElement('canvas');
-  canvas.width=W; canvas.height=H;
-  const ctx=canvas.getContext('2d');
-
-  // ── Background ──
-  const bgGrad=ctx.createLinearGradient(0,0,0,H);
-  bgGrad.addColorStop(0,'#1A2F5A'); bgGrad.addColorStop(0.08,'#2C6FAC');
-  bgGrad.addColorStop(0.12,'#F0F4F8'); bgGrad.addColorStop(1,'#F0F4F8');
-  ctx.fillStyle=bgGrad; ctx.fillRect(0,0,W,H);
-
-  // ── Header ──
-  ctx.fillStyle='rgba(255,255,255,.5)';
-  ctx.font='500 12px DM Sans,sans-serif'; ctx.textAlign='left';
-  ctx.fillText('PEDROZO · GESTÃO FINANCEIRA · 2026',48,46);
-  ctx.fillStyle='#fff';
-  ctx.font='300 40px Cormorant Garamond,serif';
-  ctx.fillText(`Resumo ${mName} 2026`,48,90);
-
-  const pad=48;
-  const cardX=pad-8, cardW=W-cardX*2;
-
-  // ── helper: white card ──
-  function card(y,h,radius=16){
-    ctx.fillStyle='#fff';
-    ctx.shadowColor='rgba(28,47,90,.08)'; ctx.shadowBlur=16; ctx.shadowOffsetY=4;
-    rr(ctx,cardX,y,cardW,h,radius); ctx.fill();
-    ctx.shadowColor='transparent'; ctx.shadowBlur=0; ctx.shadowOffsetY=0;
-  }
-
-  // ── helper: section label ──
-  function label(text,y){
-    ctx.fillStyle='#7A95AA'; ctx.font='600 10px DM Sans,sans-serif';
-    ctx.textAlign='left'; ctx.letterSpacing='0.12em';
-    ctx.fillText(text.toUpperCase(),pad,y);
-  }
-
-  // ── helper: bar ──
-  function bar(x,y,w,h,fill,track='#EBF1F7',r=4){
-    ctx.fillStyle=track; rr(ctx,x,y,w,h,r); ctx.fill();
-    ctx.fillStyle=fill;  rr(ctx,x,y,Math.max(w*fill.pct||fill,6),h,r); ctx.fill();
-  }
-
-  // ═══ SECTION 1 — MÊS ═══
-  let y=118;
-  label('Resumo do Mês',y); y+=20;
-  card(y,300);
-
-  // Total
-  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif'; ctx.textAlign='left';
-  ctx.fillText('TOTAL GASTO',pad+8,y+24);
-  ctx.fillStyle='#0D1B2A'; ctx.font='300 50px Cormorant Garamond,serif';
-  ctx.fillText(fmt(ag.total),pad+8,y+68);
-
-  // vs anterior
-  if(agPrev&&agPrev.total>0){
-    const diff=ag.total-agPrev.total, dp=((diff/agPrev.total)*100).toFixed(0);
-    ctx.fillStyle=diff>0?'#C0392B':'#1A8C5B';
-    ctx.font='400 12px DM Sans,sans-serif';
-    ctx.fillText(`${diff>0?'▲':'▼'} ${Math.abs(dp)}% vs ${mPrevName} (${fmt(agPrev.total)})`,pad+8,y+88);
-  }
-
-  // Fixas / Variáveis bars
-  const bw=cardW-32;
-  const fixaPct=ag.total?fixa/ag.total:0, variPct=ag.total?vari/ag.total:0;
-  let by=y+108;
-  ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,24,5); ctx.fill();
-  ctx.fillStyle='#2C6FAC'; rr(ctx,pad+8,by,Math.max(bw*fixaPct,6),24,5); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.font='600 11px DM Sans,sans-serif';
-  ctx.fillText(`Fixas  ${fmt(fixa)}  (${pctOf(fixa,ag.total)})`,pad+16,by+16); by+=34;
-
-  ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,24,5); ctx.fill();
-  ctx.fillStyle='#A67C2E'; rr(ctx,pad+8,by,Math.max(bw*variPct,6),24,5); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.font='600 11px DM Sans,sans-serif';
-  ctx.fillText(`Variáveis  ${fmt(vari)}  (${pctOf(vari,ag.total)})`,pad+16,by+16); by+=44;
-
-  // Top 5 categorias
-  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif';
-  ctx.fillText('TOP 5 CATEGORIAS',pad+8,by); by+=18;
-  top5.forEach(([name,val],i)=>{
-    const frac=val/maxTop;
-    ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,22,4); ctx.fill();
-    ctx.fillStyle=COLORS[i]; rr(ctx,pad+8,by,Math.max(bw*frac,6),22,4); ctx.fill();
-    ctx.fillStyle='#fff'; ctx.font='500 11px DM Sans,sans-serif'; ctx.textAlign='left';
-    ctx.fillText(name,pad+16,by+15);
-    ctx.textAlign='right';
-    const bud=BUDGET[name];
-    ctx.fillText(fmt(val)+(bud?`  /  ${fmtK(bud)}`:''),W-pad-16,by+15);
-    ctx.textAlign='left'; by+=30;
-  });
-
-  // ═══ DIVIDER ═══
-  y+=320; 
-  ctx.strokeStyle='#D8E4EF'; ctx.lineWidth=1;
-  ctx.setLineDash([6,4]);
-  ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke();
-  ctx.setLineDash([]);
-  y+=20;
-
-  // ═══ SECTION 2 — ACUMULADO ═══
-  label('Acumulado 2026',y); y+=20;
-  card(y,320);
-
-  // Total acum
-  const meses=[...new Set(txs.map(t=>t.date?.slice(5,7)).filter(Boolean))];
-  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif'; ctx.textAlign='left';
-  ctx.fillText(`${meses.length} MESES REGISTRADOS`,pad+8,y+24);
-  ctx.fillStyle='#0D1B2A'; ctx.font='300 50px Cormorant Garamond,serif';
-  ctx.fillText(fmt(agAcum.total),pad+8,y+68);
-
-  // Budget anual progress
-  const budA=Object.values(BUDGET).reduce((a,b)=>a+b,0)*12;
-  const budPct=Math.min(agAcum.total/budA,1);
-  by=y+84;
-  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif';
-  ctx.fillText(`Budget Anual: ${fmt(budA)}`,pad+8,by); by+=16;
-  ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,12,4); ctx.fill();
-  ctx.fillStyle=budPct>0.8?'#C0392B':'#2C6FAC';
-  rr(ctx,pad+8,by,Math.max(bw*budPct,6),12,4); ctx.fill();
-  ctx.fillStyle='#0D1B2A'; ctx.font='500 11px DM Sans,sans-serif';
-  ctx.textAlign='right';
-  ctx.fillText(`${(budPct*100).toFixed(0)}% utilizado`,W-pad-8,by+10);
-  ctx.textAlign='left'; by+=30;
-
-  // Top 5 acumulado
-  ctx.fillStyle='#7A95AA'; ctx.font='500 10px DM Sans,sans-serif';
-  ctx.fillText('TOP 5 CATEGORIAS — ACUMULADO',pad+8,by); by+=18;
-  top5acum.forEach(([name,val],i)=>{
-    const frac=val/maxAcum;
-    const bud=(BUDGET[name]||0)*meses.length;
-    const over=bud&&val>bud;
-    ctx.fillStyle='#EBF1F7'; rr(ctx,pad+8,by,bw,22,4); ctx.fill();
-    ctx.fillStyle=over?'#C0392B':COLORS[i];
-    rr(ctx,pad+8,by,Math.max(bw*frac,6),22,4); ctx.fill();
-    ctx.fillStyle='#fff'; ctx.font='500 11px DM Sans,sans-serif'; ctx.textAlign='left';
-    ctx.fillText(name,pad+16,by+15);
-    ctx.textAlign='right';
-    ctx.fillText(fmt(val)+(bud?`  /  ${fmtK(bud)}`:''),W-pad-16,by+15);
-    ctx.textAlign='left'; by+=30;
-  });
-
-  // ═══ FOOTER ═══
-  const now=new Date();
-  ctx.fillStyle='rgba(10,30,70,.3)'; ctx.font='400 11px DM Sans,sans-serif';
-  ctx.textAlign='center';
-  ctx.fillText(`Gerado em ${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}`,W/2,H-20);
-
-  // ── Share ──
-  canvas.toBlob(blob=>{
-    const fname=`pedrozo-resumo-${mName.toLowerCase()}-2026.png`;
-    if(navigator.share&&navigator.canShare({files:[new File([blob],fname,{type:'image/png'})]})){
-      navigator.share({files:[new File([blob],fname,{type:'image/png'})],title:`Resumo ${mName} 2026`});
-    } else {
-      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fname; a.click();
-    }
-  },'image/png');
-}
-
-function rr(ctx,x,y,w,h,r=8){
-  ctx.beginPath();
-  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y);
-  ctx.quadraticCurveTo(x+w,y,x+w,y+r);
-  ctx.lineTo(x+w,y+h-r);
-  ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
-  ctx.lineTo(x+r,y+h);
-  ctx.quadraticCurveTo(x,y+h,x,y+h-r);
-  ctx.lineTo(x,y+r);
-  ctx.quadraticCurveTo(x,y,x+r,y);
-  ctx.closePath();
-}
-
-
-// ── LANÇAMENTO MANUAL ─────────────────────────────────
-function openManual() {
-  document.getElementById('manual-modal').classList.add('open');
-  document.getElementById('manual-sub').innerHTML = ALL_SUBS.map(s=>`<option value="${s}">${s}</option>`).join('');
-}
-function closeManual() { document.getElementById('manual-modal').classList.remove('open'); }
-
-async function saveManual() {
-  const date  = document.getElementById('manual-date').value;
-  const desc  = document.getElementById('manual-desc').value.trim();
-  const val   = parseFloat(document.getElementById('manual-val').value.replace(',','.'));
-  const sub   = document.getElementById('manual-sub').value;
-  const obs   = document.getElementById('manual-obs').value.trim();
-  if (!date||!desc||!val) { showToast('Preencha data, descrição e valor','warn'); return; }
-  const cat   = getCat(sub);
-  const id    = `manual_${date.replace(/-/g,'')}_${desc.slice(0,8).replace(/\s/g,'')}_${val}`;
-  const tx    = {id, date, desc, val, cat, sub, pessoa:'', obs, source:'manual'};
-  const added = await syncTxs([tx]);
-  showToast(added>0?`✓ Lançamento adicionado!`:'Lançamento já existe','ok');
-  closeManual();
-  refreshAll();
-}
-
-// ── EDIT TRANSACTION ─────────────────────────────────
-function openEditTx(txId) {
-  const t = STATE.txs.find(x => x.id === txId);
-  if (!t) return;
-  document.getElementById('edittx-id').value   = txId;
-  document.getElementById('edittx-desc').textContent = t.desc;
-  document.getElementById('edittx-date').textContent = t.date;
-  document.getElementById('edittx-val').textContent  = fmt(parseFloat(t.val)||0);
-
-  const subEl = document.getElementById('edittx-sub');
-  subEl.innerHTML = ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('');
-
-  const catEl = document.getElementById('edittx-cat');
-  catEl.value = getCat(t.sub); // auto from map, but allow override
-
-  document.getElementById('edittx-modal').classList.add('open');
-}
-
-// Auto-update cat when sub changes
-function onEditSubChange() {
-  const sub = document.getElementById('edittx-sub').value;
-  document.getElementById('edittx-cat').value = getCat(sub);
-}
-
-async function saveEditTx() {
-  const txId  = document.getElementById('edittx-id').value;
-  const newSub = document.getElementById('edittx-sub').value;
-  const newCat = document.getElementById('edittx-cat').value;
-
-  // Update CAT_MAP override for this session
-  // (permanent fix: update the tx itself)
-  STATE.txs = STATE.txs.map(tx => tx.id===txId ? {...tx, sub:newSub, cat:newCat} : tx);
-  cache.save(STATE.txs);
-
-  if (isConfigured()) {
-    const t = STATE.txs.find(x=>x.id===txId);
-    sheetsPost({action:'updateTx', tx:t}).catch(()=>{});
-  }
-  reviewed.approve(txId);
-
-  closeEditTx();
-  // Refresh detail modal if open
-  const detailTitle = document.getElementById('detail-title').textContent;
-  if (detailTitle) openDetail(detailTitle);
-  refreshAll();
-  showToast('Lançamento atualizado ✓', 'ok');
-}
-
-function closeEditTx() {
-  document.getElementById('edittx-modal').classList.remove('open');
-}
-
-
-// ── FRACIONAMENTO ─────────────────────────────────────
-let splitTxId = null;
-let splitParts = [];
-
-function openSplit(txId) {
-  const t = STATE.txs.find(x => x.id === txId);
-  if (!t) return;
-  splitTxId = txId;
-  splitParts = [
-    { desc: t.desc, sub: t.sub, val: '' },
-    { desc: '', sub: t.sub, val: '' }
-  ];
-  document.getElementById('split-original-desc').textContent = t.desc;
-  document.getElementById('split-original-val').textContent  = fmt(parseFloat(t.val)||0);
-  document.getElementById('split-original-val').dataset.total = t.val;
-  renderSplitParts();
-  document.getElementById('split-modal').classList.add('open');
-}
-
-function renderSplitParts() {
-  const total = parseFloat(document.getElementById('split-original-val').dataset.total)||0;
-  const used  = splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
-  const remaining = total - used;
-  document.getElementById('split-remaining').textContent =
-    `Restante: ${fmt(remaining)} de ${fmt(total)}`;
-  document.getElementById('split-remaining').style.color =
-    Math.abs(remaining)<0.01 ? 'var(--green)' : remaining<0 ? 'var(--red)' : 'var(--muted)';
-
-  document.getElementById('split-parts').innerHTML = splitParts.map((p,i) => `
-    <div class="split-part">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted2)">Parte ${i+1}</div>
-        ${splitParts.length>2?`<span onclick="removeSplitPart(${i})" style="font-size:18px;color:var(--muted);cursor:pointer;line-height:1">×</span>`:''}
-      </div>
-      <div class="manual-field" style="margin-bottom:6px">
-        <label>Descrição</label>
-        <input type="text" value="${p.desc}" oninput="splitParts[${i}].desc=this.value" placeholder="Ex: Mercado">
-      </div>
-      <div style="display:flex;gap:8px">
-        <div class="manual-field" style="flex:1;margin-bottom:0">
-          <label>Categoria</label>
-          <select onchange="splitParts[${i}].sub=this.value">
-            ${ALL_SUBS.map(s=>`<option value="${s}" ${s===p.sub?'selected':''}>${s}</option>`).join('')}
-          </select>
-        </div>
-        <div class="manual-field" style="width:100px;margin-bottom:0">
-          <label>Valor (R$)</label>
-          <input type="number" value="${p.val}" step="0.01" placeholder="0,00"
-            oninput="splitParts[${i}].val=this.value;renderSplitParts()">
-        </div>
-      </div>
-    </div>`).join('');
-}
-
-function addSplitPart() {
-  const t = STATE.txs.find(x=>x.id===splitTxId);
-  splitParts.push({desc:'', sub: t?.sub||ALL_SUBS[0], val:''});
-  renderSplitParts();
-}
-
-function removeSplitPart(i) {
-  splitParts.splice(i,1);
-  renderSplitParts();
-}
-
-function saveSplit() {
-  const t = STATE.txs.find(x=>x.id===splitTxId);
-  if (!t) return closeSplit();
-  const total = parseFloat(t.val)||0;
-  const used  = splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
-  if (Math.abs(used-total)>0.02) {
-    showToast(`Soma das partes (${fmt(used)}) ≠ total (${fmt(total)})`,'warn');
-    return;
-  }
-  // Remove original, add parts
-  STATE.txs = STATE.txs.filter(x=>x.id!==splitTxId);
-  const newTxs = splitParts.map((p,i)=>({
-    ...t,
-    id: `${splitTxId}_s${i+1}`,
-    desc: p.desc||t.desc,
-    sub: p.sub,
-    cat: getCat(p.sub),
-    val: String(parseFloat(p.val)||0),
-    obs: (t.obs?t.obs+' · ':'')+`fração ${i+1}/${splitParts.length}`
-  }));
-  STATE.txs = [...STATE.txs, ...newTxs];
-  cache.save(STATE.txs);
-  if (isConfigured()) {
-    sheetsPost({action:'deleteTx', id:splitTxId}).catch(()=>{});
-    sheetsPost({action:'addTxs', txs:newTxs}).catch(()=>{});
-  }
-  reviewed.approve(splitTxId);
-  newTxs.forEach(tx=>reviewed.approve(tx.id));
-  closeSplit();
-  refreshAll();
-  showToast(`Dividido em ${splitParts.length} lançamentos ✓`,'ok');
-}
-
-function closeSplit() {
-  document.getElementById('split-modal').classList.remove('open');
-  splitTxId=null; splitParts=[];
-}
-
-// ── IMPORT ────────────────────────────────────────────
-let pendingTxs=[];
-function renderImport() {
-  document.getElementById('import-log').innerHTML='';
-  document.getElementById('import-count').textContent='';
-  document.getElementById('btn-confirm').disabled=true;
-  pendingTxs=[];
-}
-
-function parseCSV(text,type) {
-  const lines=text.split('\n'), results=[], TODAY=new Date(), DATE_RE=/^\d{2}\/\d{2}\/\d{4}$/;
-  let futureLine=lines.findIndex(l=>/futuros/i.test(l)); if (futureLine===-1) futureLine=Infinity;
-  const sep=lines.find(l=>l.includes(';'))?';':',';
-  lines.forEach((line,i)=>{
-    if (i>=futureLine) return;
-    const parts=line.trim().split(sep); if (parts.length<4) return;
-    let dateStr,desc,valStr;
-    if (type==='card_unicred') { dateStr=parts[0].trim(); desc=parts[2].trim(); valStr=parts[3].trim(); }
-    else { const o=parts[0].trim()===''?1:0; dateStr=parts[o].trim(); desc=parts[o+1].trim(); valStr=parts[o+3].trim(); }
-    if (!DATE_RE.test(dateStr)) return;
-    const [d,m,y]=dateStr.split('/'), date=new Date(`${y}-${m}-${d}`);
-    if (date>TODAY) return;
-    const rawVal=parseFloat(valStr.replace(',','.')); if (isNaN(rawVal)||rawVal===0) return;
-    if (type==='card_unicred'&&rawVal<0) return;
-    if (type!=='card_unicred'&&rawVal>0) return;
-    const val=Math.abs(rawVal);
-    const {cat,sub,pessoa}=categorize(desc,type==='card_unicred'?'card':type);
-    if (!cat) return;
-    results.push({id:`${y}${m}${d}_${desc.slice(0,10).replace(/\s/g,'')}_${val}`,
-      date:`${y}-${m}-${d}`,desc,val,cat,sub,pessoa:pessoa||'',obs:'',source:type});
-  });
-  return results;
-}
-
-// Expand parcelas: if desc has "XX/YY", create future installments
-function expandParcelas(txs) {
-  const extra = [];
-  txs.forEach(t => {
-    const m = t.desc.match(/(\d{2})\/(\d{2})/);
-    if (!m) return;
-    const cur = parseInt(m[1]), tot = parseInt(m[2]);
-    if (cur < 1 || tot < 2 || cur > tot) return;
-    const remaining = tot - cur;
-    const [y, mo, d] = t.date.split('-').map(Number);
-    for (let i = 1; i <= remaining; i++) {
-      let nm = mo + i, ny = y;
-      while (nm > 12) { nm -= 12; ny++; }
-      const ndate = `${ny}-${String(nm).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      const nDesc = t.desc.replace(/\d{2}\/\d{2}/, `${String(cur+i).padStart(2,'0')}/${String(tot).padStart(2,'0')}`);
-      extra.push({
-        ...t,
-        id: `${t.id}_p${cur+i}`,
-        date: ndate,
-        desc: nDesc,
-        obs: t.obs ? t.obs + ` (parcela ${cur+i}/${tot})` : `parcela ${cur+i}/${tot}`,
-        source: t.source + '_parcela'
-      });
-    }
-  });
-  return [...txs, ...extra];
-}
-
-function handleFiles(files) {
-  pendingTxs=[]; const logEl=document.getElementById('import-log'); logEl.innerHTML='';
-  document.getElementById('import-count').textContent='Lendo arquivos...';
-  document.getElementById('btn-confirm').disabled=true;
-  let processed=0;
-  Array.from(files).forEach(file=>{
-    const reader=new FileReader();
-    reader.onload=e=>{
-      const fname=file.name.toLowerCase();
-      let type='card';
-      if (fname.includes('unicred')&&fname.includes('fatura')) type='card_unicred';
-      else if (fname.includes('unicred')||fname.includes('extrato-')) type='unicred';
-      else if (fname.includes('itau')||fname.includes('extrato_conta')) type='itau';
-      pendingTxs.push(...expandParcelas(parseCSV(e.target.result,type)));
-      if (++processed===files.length) showImportPreview();
-    };
-    reader.readAsText(file,'latin-1');
-  });
-}
-
-function showImportPreview() {
-  const existing = cache.load();
-  const {fresh, dupes, exact} = detectDuplicates(pendingTxs, existing);
-  const logEl = document.getElementById('import-log');
-
-  let html='';
-
-  if (fresh.length>0) {
-    html+=`<div class="import-section-label import-ok">✓ ${fresh.length} novos — serão adicionados</div>`;
-    html+=fresh.map(t=>`<div class="log-item">
-      <div class="log-dot" style="background:${t.sub==='NÃO CATEGORIZADO'?'#C0392B':'#1A8C5B'}"></div>
-      <div style="flex:1"><div class="log-desc">${t.desc.slice(0,40)}</div>
-      <div class="log-sub">${t.date} · ${t.sub}</div></div>
-      <div class="log-val">${fmt(t.val)}</div></div>`).join('');
-  }
-
-  if (dupes.length>0) {
-    html+=`<div class="import-section-label import-warn">⚠ ${dupes.length} possíveis duplicatas — verifique</div>`;
-    html+=dupes.map(({tx,similar})=>`<div class="log-item" style="border-left:3px solid #E8A020">
-      <div class="log-dot" style="background:#E8A020"></div>
-      <div style="flex:1">
-        <div class="log-desc">${tx.desc.slice(0,38)}</div>
-        <div class="log-sub">${tx.date} · similar a: ${similar.date} ${similar.desc.slice(0,20)}</div>
-      </div>
-      <div style="text-align:right">
-        <div class="log-val">${fmt(tx.val)}</div>
-        <label style="font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px">
-          <input type="checkbox" class="dupe-include" data-id="${tx.id}" style="width:12px;height:12px"> incluir
-        </label>
-      </div></div>`).join('');
-  }
-
-  if (exact.length>0) {
-    html+=`<div class="import-section-label import-muted">✗ ${exact.length} já existentes — ignorados</div>`;
-  }
-
-  logEl.innerHTML=html;
-  document.getElementById('import-count').textContent=
-    `${fresh.length} novos · ${dupes.length} a verificar · ${exact.length} ignorados`;
-  document.getElementById('btn-confirm').disabled=(fresh.length===0&&dupes.length===0);
-}
-
-async function confirmImport() {
-  const btn=document.getElementById('btn-confirm');
-  btn.disabled=true; btn.textContent='Salvando...';
-
-  // Get checked dupes
-  const checkedDupes=[];
-  document.querySelectorAll('.dupe-include:checked').forEach(cb=>{
-    const tx=pendingTxs.find(t=>t.id===cb.dataset.id);
-    if(tx) checkedDupes.push(tx);
-  });
-
-  const existing=cache.load();
-  const {fresh}=detectDuplicates(pendingTxs,existing);
-  const toAdd=[...fresh,...checkedDupes];
-
-  const all=cache.load(); const keys=new Set(all.map(t=>t.id));
-  const realFresh=toAdd.filter(t=>!keys.has(t.id));
-  cache.save([...all,...realFresh]); STATE.txs=cache.load();
-
-  let added=realFresh.length;
-  if(isConfigured()&&realFresh.length>0){
-    try { await sheetsPost({action:'addTxs',txs:realFresh}); }
-    catch(e){ STATE.error='Salvo localmente'; }
-  }
-
-  showToast(`✓ ${added} novos lançamentos adicionados!`,'ok');
-  document.getElementById('import-count').textContent=`✓ ${added} adicionados`;
-  btn.textContent='Confirmar Importação'; pendingTxs=[];
-  refreshAll();
-}
 
 // ── HOME PIZZA ────────────────────────────────────────
 function renderHomePizza(txs) {
@@ -1464,8 +455,156 @@ function renderHomePizza(txs) {
 }
 
 
+// ── REGRAS ────────────────────────────────────────────
+function renderRules() {
+  const rules = userRules.load();
+  const cats = STATE.txs.filter(t=>t.sub==='NÃO CATEGORIZADO').length;
+
+  let html = `<div style="padding:0 16px 12px">
+    <div style="font-size:12px;color:var(--muted2);line-height:1.5;margin-bottom:12px">
+      Palavras-chave que identificam automaticamente a categoria ao importar.
+      ${cats>0?`<span style="color:var(--red);font-weight:600"> ${cats} lançamentos sem categoria.</span>`:''}
+    </div>`;
+
+  // Add new rule form
+  html += `<div style="background:var(--s2);border-radius:10px;padding:12px;margin-bottom:16px;border:1px solid var(--border)">
+    <div style="font-size:11px;font-weight:600;color:var(--muted2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em">Nova Regra</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="rule-kw" type="text" placeholder="Palavra-chave (ex: UBER)"
+        style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--s1);color:var(--text);font-family:inherit">
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <select id="rule-sub" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--s1);color:var(--text);font-family:inherit">
+        ${ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO').map(s=>`<option value="${s}">${s}</option>`).join('')}
+      </select>
+      <button onclick="saveNewRule()" class="btn" style="margin:0;padding:8px 16px;flex-shrink:0">+ Adicionar</button>
+    </div>
+    ${cats>0?`<button onclick="applyAndRefresh()" class="btn" style="margin-top:8px;width:100%;background:var(--green);border:none">
+      ✓ Aplicar regras aos ${cats} lançamentos sem categoria</button>`:''}
+  </div>`;
+
+  // Existing user rules
+  if (rules.length > 0) {
+    html += `<div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Suas Regras (${rules.length})</div>`;
+    html += rules.map(r=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;color:var(--text);font-family:monospace">${r.kw}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">→ ${r.sub}</div>
+        </div>
+        <button onclick="removeRule('${r.kw}')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px;line-height:1">×</button>
+      </div>`).join('');
+  }
+
+  // Summary of built-in rules count
+  const builtIn = RULES_CARD.length + RULES_ITAU.length + RULES_UNICRED.length;
+  html += `<div style="margin-top:16px;font-size:11px;color:var(--muted);text-align:center">${builtIn} regras automáticas pré-configuradas</div>`;
+
+  html += `</div>`;
+  document.getElementById('rules-content').innerHTML = html;
+}
+
+function saveNewRule() {
+  const kw = document.getElementById('rule-kw').value.trim().toUpperCase();
+  const sub = document.getElementById('rule-sub').value;
+  if (!kw) { showToast('Digite uma palavra-chave','warn'); return; }
+  userRules.add(kw, sub);
+  document.getElementById('rule-kw').value = '';
+  renderRules();
+  showToast(`Regra "${kw}" → ${sub} salva ✓`, 'ok');
+}
+
+function removeRule(kw) {
+  userRules.remove(kw);
+  renderRules();
+  showToast(`Regra "${kw}" removida`, 'ok');
+}
+
+function applyAndRefresh() {
+  const n = applyUserRulesToAll();
+  showToast(`${n} lançamentos categorizados ✓`, 'ok');
+  refreshAll();
+}
+
+
+// ── BUSCA GLOBAL ──────────────────────────────────────
+let searchFilter = 'all';
+
+function openSearch() {
+  document.getElementById('search-modal').classList.add('open');
+  setTimeout(()=>document.getElementById('search-input').focus(), 100);
+  runSearch();
+}
+
+function closeSearch() {
+  document.getElementById('search-modal').classList.remove('open');
+  document.getElementById('search-input').value = '';
+}
+
+function setSearchFilter(f) {
+  searchFilter = f;
+  document.querySelectorAll('#search-filters .sort-pill').forEach(b=>b.classList.remove('active'));
+  event.target.classList.add('active');
+  runSearch();
+}
+
+function runSearch() {
+  const q = (document.getElementById('search-input').value || '').trim().toLowerCase();
+  const txs = STATE.txs;
+  const curMonth = typeof activeMonth !== 'undefined' ? activeMonth : '01';
+
+  let pool = txs;
+  if (searchFilter === 'month') pool = txs.filter(t=>t.date&&t.date.startsWith(`2026-${curMonth}`));
+  if (searchFilter === 'uncat') pool = txs.filter(t=>t.sub==='NÃO CATEGORIZADO');
+
+  let results = pool;
+  if (q) {
+    results = pool.filter(t => {
+      const val = String(parseFloat(t.val)||0);
+      return (t.desc||'').toLowerCase().includes(q)
+        || (t.sub||'').toLowerCase().includes(q)
+        || (t.obs||'').toLowerCase().includes(q)
+        || val.includes(q);
+    });
+  }
+
+  // Sort by date desc
+  results = [...results].sort((a,b)=>b.date?.localeCompare(a.date||'')||0);
+
+  const total = results.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  document.getElementById('search-summary').textContent =
+    q || searchFilter!=='all'
+      ? `${results.length} resultado${results.length!==1?'s':''} · ${fmt(total)}`
+      : `${pool.length} lançamentos · ${fmt(pool.reduce((s,t)=>s+(parseFloat(t.val)||0),0))}`;
+
+  if (!results.length) {
+    document.getElementById('search-results').innerHTML =
+      `<div style="padding:32px;text-align:center;color:var(--muted);font-size:13px">Nenhum resultado encontrado</div>`;
+    return;
+  }
+
+  const rev = reviewed.load();
+  document.getElementById('search-results').innerHTML = results.slice(0,100).map(t=>{
+    const st = rev[t.id], dot = st==='ok'?'✓':st?'✎':'·';
+    const dotC = st==='ok'?'var(--green)':st?'var(--blue)':'var(--border)';
+    const over = BUDGET[t.sub] && parseFloat(t.val) > BUDGET[t.sub];
+    return `<div class="search-row" onclick="closeSearch();openEditTx('${t.id}')">
+      <div style="color:${dotC};font-size:13px;width:14px;flex-shrink:0">${dot}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px;display:flex;gap:8px">
+          <span>${t.date}</span>
+          <span style="color:var(--blue)">${t.sub}</span>
+          ${t.obs?`<span style="color:var(--muted2)">${t.obs}</span>`:''}
+        </div>
+      </div>
+      <div style="font-size:13px;font-weight:600;color:${over?'var(--red)':'var(--text)'};font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
+    </div>`;
+  }).join('') + (results.length>100?`<div style="padding:12px;text-align:center;font-size:11px;color:var(--muted)">Mostrando 100 de ${results.length} resultados — refine a busca</div>`:'');
+}
+
 // ── NAV ───────────────────────────────────────────────
-const SCREENS=['home','despesas','comparativo','patrimonio','revisar','import'];
+const SCREENS=['home','despesas','comparativo','patrimonio','revisar','regras','import'];
 function showScreen(id) {
   SCREENS.forEach(s=>{
     document.getElementById('screen-'+s).classList.toggle('active',s===id);
@@ -1912,6 +1051,9 @@ document.addEventListener('DOMContentLoaded',()=>{
   });
   document.getElementById('split-modal').addEventListener('click',e=>{
     if (e.target===document.getElementById('split-modal')) closeSplit();
+  });
+  document.getElementById('search-modal').addEventListener('click',e=>{
+    if (e.target===document.getElementById('search-modal')) closeSearch();
   });
   loadData();
 });
