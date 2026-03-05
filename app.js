@@ -1,10 +1,10 @@
-// ═══════════════════════════════════════════════════════
-//  PEDROZO · FINANÇAS · PWA  v3
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════
+//  JCRP FAMILY FINANCE · PWA · v43
+// ═══════════════════════════════════════════════════
 
 const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbz7fY0H-OV2_7vzb69KMVrXQ-AxdVKsHuNXDqA8eAzdTQUPjTBHiyD1dJIPc5vUVa88Bw/exec';
 
-// ── RULES ─────────────────────────────────────────────
+// ── RULES ─────────────────────────────────────────
 const RULES_ITAU = [
   ['JUROS LIMITE','Fixa','IMPOSTOS',null],['IOF','Fixa','IMPOSTOS',null],
   ['INT DOC ARREC E-SOCI','Fixa','FUNCIONÁRIAS',null],['BKI DOC ARREC E-SOCI','Fixa','FUNCIONÁRIAS',null],
@@ -62,63 +62,11 @@ const ALL_SUBS = ['ALIMENTAÇÃO','APTO','ASSINATURAS','BELEZA ESTÉTICA BEM EST
   'FUNCIONÁRIAS','IMPOSTOS','LAVANDERIA','LAZER','LUZ','MORADIA','NÃO CATEGORIZADO',
   'PRESENTES','PREVIDENCIA /  VIDA','RICARDO','SAÚDE','SEGUROS','SUPERMERCADO','TRANSPORTE','VIAGEM'];
 
-// ── USER RULES (localStorage) ─────────────────────────
-const USER_RULES_KEY = 'jcrp_user_rules';
-const userRules = {
-  load() { try { return JSON.parse(localStorage.getItem(USER_RULES_KEY)||'[]'); } catch { return []; } },
-  save(r) { localStorage.setItem(USER_RULES_KEY, JSON.stringify(r)); },
-  add(kw, sub) {
-    const rules = this.load();
-    const cat = getCat(sub);
-    // Remove existing rule with same keyword
-    const filtered = rules.filter(r => r.kw.toUpperCase() !== kw.toUpperCase());
-    filtered.unshift({kw: kw.toUpperCase(), cat, sub});
-    this.save(filtered);
-  },
-  remove(kw) {
-    const rules = this.load().filter(r => r.kw.toUpperCase() !== kw.toUpperCase());
-    this.save(rules);
-  }
+const CAT_MAP = {
+  'CATARINA':'Fixa','CARRO':'Fixa','FUNCIONÁRIAS':'Fixa','SEGUROS':'Fixa',
+  'APTO':'Fixa','PREVIDENCIA /  VIDA':'Fixa','ASSINATURAS':'Fixa',
+  'CONDOMÍNIO':'Fixa','LUZ':'Fixa','IMPOSTOS':'Fixa',
 };
-
-function categorize(desc, type) {
-  const d = desc.toUpperCase();
-
-  // 1. User rules take priority
-  for (const r of userRules.load()) {
-    if (d.includes(r.kw)) return {cat:r.cat, sub:r.sub, pessoa:null};
-  }
-
-  // 2. Built-in rules
-  const rules = type==='itau'?RULES_ITAU:type==='unicred'?RULES_UNICRED:RULES_CARD;
-  for (const [kw,cat,sub,pessoa] of rules) {
-    if (new RegExp(kw.toUpperCase()).test(d)) return {cat,sub,pessoa};
-  }
-  return {cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:null};
-}
-
-// ── APPLY USER RULES TO EXISTING TXS ──────────────────
-function applyUserRulesToAll() {
-  const rules = userRules.load();
-  if (!rules.length) return 0;
-  let changed = 0;
-  STATE.txs = STATE.txs.map(t => {
-    if (t.sub !== 'NÃO CATEGORIZADO') return t;
-    const d = t.desc.toUpperCase();
-    for (const r of rules) {
-      if (d.includes(r.kw)) {
-        changed++;
-        return {...t, sub:r.sub, cat:r.cat};
-      }
-    }
-    return t;
-  });
-  if (changed > 0) {
-    cache.save(STATE.txs);
-    if (isConfigured()) sheetsPost({action:'addTxs', txs:STATE.txs.filter(t=>t.sub!=='NÃO CATEGORIZADO')}).catch(()=>{});
-  }
-  return changed;
-}
 
 const BUDGET = {
   'VIAGEM':25000,'COMPRAS P':5000,'CARRO':17000,'FUNCIONÁRIAS':8000,'COMPRAS J':5000,
@@ -129,504 +77,152 @@ const BUDGET = {
   'APTO':8000,'PREVIDENCIA /  VIDA':2500,
 };
 
+const MNAMES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const COLORS = ['#2C6FAC','#1A8C5B','#C07010','#8C2A8C','#C0392B','#2980B9','#16A085','#E67E22','#8E44AD','#D35400'];
 
-// ── CAT MAP — fonte da verdade ────────────────────────
-const CAT_MAP = {
-  'CATARINA':'Fixa','CARRO':'Fixa','FUNCIONÁRIAS':'Fixa','SEGUROS':'Fixa',
-  'APTO':'Fixa','PREVIDENCIA /  VIDA':'Fixa','ASSINATURAS':'Fixa',
-  'CONDOMÍNIO':'Fixa','LUZ':'Fixa',
-};
+// ── HELPERS ───────────────────────────────────────
 function getCat(sub) { return CAT_MAP[sub] || 'Variáveis'; }
+function fmt(v) { return 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtK(v) { const n=Number(v||0); if(Math.abs(n)>=1000000) return 'R$'+(n/1000000).toFixed(1)+'M'; if(Math.abs(n)>=1000) return 'R$'+(n/1000).toFixed(0)+'k'; return 'R$'+n.toFixed(0); }
+function pctOf(v,t) { return t?((v/t)*100).toFixed(0)+'%':'0%'; }
 
-// ── FORMAT ────────────────────────────────────────────
-const MNAMES=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-const COLORS=['#2C6FAC','#1A8C5B','#C07010','#8C2A8C','#C0392B','#2980B9','#16A085','#E67E22','#8E44AD','#C0392B'];
-
-function fmt(v) {
-  return 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
-}
-function fmtK(v) {
-  const n=Number(v||0);
-  if(Math.abs(n)>=1000000) return 'R$'+(n/1000000).toFixed(1)+'M';
-  if(Math.abs(n)>=1000) return 'R$'+(n/1000).toFixed(0)+'k';
-  return 'R$'+n.toFixed(0);
-}
-function pctOf(v,total) { return total?((v/total)*100).toFixed(0)+'%':'0%'; }
-
-// ── PARSE CSV ─────────────────────────────────────────
-function parseCSV(text, type) {
-  const lines = text.split(/\r?\n/).filter(l=>l.trim());
-  const results = [];
-  lines.forEach(line => {
-    const cols = line.split(';').map(c=>c.replace(/^"|"$/g,'').trim());
-    let date='', desc='', val=0, id='';
-    if (type==='itau') {
-      if (!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
-      const [d,m,y]=cols[0].split('/');
-      date=`${y}-${m}-${d}`;
-      desc=cols[1]||'';
-      val=parseFloat((cols[2]||'0').replace('.','').replace(',','.'))||0;
-      if (val<=0) return;
-    } else if (type==='unicred') {
-      if (!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
-      const [d,m,y]=cols[0].split('/');
-      date=`${y}-${m}-${d}`;
-      desc=cols[2]||cols[1]||'';
-      val=parseFloat((cols[3]||'0').replace('.','').replace(',','.'))||0;
-      if (val<=0) return;
-    } else {
-      // card CSV
-      if (!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
-      const [d,m,y]=cols[0].split('/');
-      date=`${y}-${m}-${d}`;
-      desc=cols[1]||'';
-      val=parseFloat((cols[2]||'0').replace('.','').replace(',','.'))||0;
-      if (val<=0) return;
-    }
-    const slug=desc.replace(/[^a-zA-Z0-9]/g,'').slice(0,10);
-    id=`${type}_${date.replace(/-/g,'')}_${slug}_${val}`;
-    const {cat,sub,pessoa}=categorize(desc,type);
-    if(cat===null) return; // skip transfers
-    results.push({id,date,desc,val:String(val),cat,sub:sub||'NÃO CATEGORIZADO',pessoa:pessoa||'',obs:'',source:type});
-  });
-  return results;
-}
-
-function expandParcelas(txs) {
-  const extra=[];
-  txs.forEach(t=>{
-    const m=t.desc.match(/(\d{2})\/(\d{2})/);
-    if(!m) return;
-    const cur=parseInt(m[1]),tot=parseInt(m[2]);
-    if(cur<1||tot<2||cur>tot) return;
-    const[y,mo,d]=t.date.split('-').map(Number);
-    for(let i=1;i<=tot-cur;i++){
-      let nm=mo+i,ny=y;
-      while(nm>12){nm-=12;ny++;}
-      const ndate=`${ny}-${String(nm).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      const nDesc=t.desc.replace(/\d{2}\/\d{2}/,`${String(cur+i).padStart(2,'0')}/${String(tot).padStart(2,'0')}`);
-      extra.push({...t,id:`${t.id}_p${cur+i}`,date:ndate,desc:nDesc,obs:`parcela ${cur+i}/${tot}`,source:t.source+'_parcela'});
-    }
-  });
-  return [...txs,...extra];
-}
-
-function detectDuplicates(newTxs,existing){
-  const existIds=new Set(existing.map(t=>t.id));
-  const fresh=[],dupes=[],exact=[];
-  newTxs.forEach(t=>{
-    if(existIds.has(t.id)){exact.push(t);return;}
-    const similar=existing.find(e=>{
-      if(Math.abs(parseFloat(e.val)-parseFloat(t.val))>0.01) return false;
-      if(!e.date||!t.date) return false;
-      const d1=new Date(e.date),d2=new Date(t.date);
-      return Math.abs(d1-d2)<=3*86400000;
-    });
-    if(similar) dupes.push({tx:t,similar});
-    else fresh.push(t);
-  });
-  return{fresh,dupes,exact};
-}
-
-// ── MODALS ────────────────────────────────────────────
-function openDetail(subName) {
-  const txs=STATE.txs;
-  const filtered=txs.filter(t=>t.sub===subName).sort((a,b)=>b.date?.localeCompare(a.date||'')||0);
-  const total=filtered.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
-  document.getElementById('detail-title').textContent=subName;
-  document.getElementById('detail-total').textContent=fmt(total)+' · '+filtered.length+' lançamentos';
-  const byM={}; filtered.forEach(t=>{const m=t.date?.slice(5,7)||'00';byM[m]=(byM[m]||0)+(parseFloat(t.val)||0);});
-  document.getElementById('detail-chart').innerHTML=monthBarChart(byM,BUDGET[subName]);
-  const rev=reviewed.load();
-  document.getElementById('detail-list').innerHTML=filtered.map(t=>{
-    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'#1A8C5B':st?'#A67C2E':'#ccc';
-    const catColor=getCat(t.sub)==='Fixa'?'var(--blue)':'var(--gold)';
-    return `<div class="detail-row" style="cursor:pointer">
-      <div style="color:${dotC};font-size:14px;width:16px;flex-shrink:0">${dot}</div>
-      <div style="flex:1;min-width:0" onclick="openEditTx('${t.id}')">
-        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date}
-          <span style="color:${catColor};margin-left:4px">${getCat(t.sub)}</span>
-          ${t.obs?' · '+t.obs:''}
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:8px">
-        <div style="font-size:12px;color:var(--text);font-feature-settings:'tnum'">${fmt(parseFloat(t.val)||0)}</div>
-        <div onclick="openSplit('${t.id}')" style="font-size:10px;color:var(--blue);cursor:pointer;padding:2px 5px;border:1px solid var(--border);border-radius:4px">÷</div>
-      </div>
-    </div>`;
-  }).join('');
-  document.getElementById('detail-modal').classList.add('open');
-}
-
-function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
-
-function openEditTx(txId) {
-  const t=STATE.txs.find(x=>x.id===txId); if(!t) return;
-  document.getElementById('edittx-id').value=txId;
-  document.getElementById('edittx-desc').textContent=t.desc||'';
-  document.getElementById('edittx-date').textContent=t.date||'';
-  document.getElementById('edittx-val').textContent=fmt(parseFloat(t.val)||0);
-  
-  const sel=document.getElementById('edittx-sub');
-  if(sel)sel.innerHTML=ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('');
-  const catSel=document.getElementById('edittx-cat');
-  if(catSel)catSel.value=t.cat||getCat(t.sub);
-  document.getElementById('edittx-modal').classList.add('open');
-}
-
-function closeEditTx() { document.getElementById('edittx-modal').classList.remove('open'); }
-
-async function saveEditTx() {
-  const id=document.getElementById('edittx-id').value;
-  const sub=document.getElementById('edittx-sub').value;
-  const catEl=document.getElementById('edittx-cat');
-  const cat=catEl?catEl.value:getCat(sub);
-  const upd={
-    desc:document.getElementById('edittx-desc').textContent,
-    date:document.getElementById('edittx-date').textContent,
-    val:String(parseFloat(document.getElementById('edittx-val').textContent.replace(/[^0-9,.]/g,'').replace(',','.'))||0),
-    sub,cat,
-    obs:'',
-  };
-  STATE.txs=STATE.txs.map(t=>t.id===id?{...t,...upd}:t);
-  cache.save(STATE.txs);
-  if(isConfigured()) sheetsPost({action:'editTx',tx:{...STATE.txs.find(t=>t.id===id)}}).catch(()=>{});
-  closeEditTx();
-  refreshAll();
-  showToast('Lançamento salvo ✓','ok');
-}
-
-async function deleteTx() {
-  const id=document.getElementById('edittx-id').value;
-  if(!confirm('Excluir este lançamento?')) return;
-  STATE.txs=STATE.txs.filter(t=>t.id!==id);
-  cache.save(STATE.txs);
-  if(isConfigured()) sheetsPost({action:'deleteTx',id}).catch(()=>{});
-  closeEditTx();
-  refreshAll();
-  showToast('Lançamento excluído','ok');
-}
-
-function openManual() {
-  document.getElementById('manual-date').value=new Date().toISOString().slice(0,10);
-  document.getElementById('manual-val').value='';
-  document.getElementById('manual-desc').value='';
-  document.getElementById('manual-obs').value='';
-  const sel=document.getElementById('manual-sub');
-  if(sel) sel.innerHTML=ALL_SUBS.map(s=>`<option value="${s}">${s}</option>`).join('');
-  document.getElementById('manual-modal').classList.add('open');
-}
-
-function closeManual() { document.getElementById('manual-modal').classList.remove('open'); }
-
-async function saveManual() {
-  const date=document.getElementById('manual-date').value;
-  const val=document.getElementById('manual-val').value;
-  const desc=document.getElementById('manual-desc').value;
-  const sub=document.getElementById('manual-sub').value;
-  const obs=document.getElementById('manual-obs').value;
-  if(!date||!val||!desc){showToast('Preencha data, valor e descrição','warn');return;}
-  const cat=getCat(sub);
-  const slug=desc.replace(/[^a-zA-Z0-9]/g,'').slice(0,10);
-  const id=`manual_${date.replace(/-/g,'')}_${slug}_${val}`;
-  const tx={id,date,desc,val:String(parseFloat(val)||0),cat,sub,pessoa:'',obs,source:'manual'};
-  STATE.txs.push(tx);
-  cache.save(STATE.txs);
-  if(isConfigured()) sheetsPost({action:'addTxs',txs:[tx]}).catch(()=>{});
-  closeManual();
-  refreshAll();
-  showToast('Lançamento adicionado ✓','ok');
-}
-
-// ── SPLIT ─────────────────────────────────────────────
-let splitTxId=null, splitParts=[];
-
-function openSplit(txId) {
-  const t=STATE.txs.find(x=>x.id===txId); if(!t) return;
-  splitTxId=txId;
-  splitParts=[{desc:t.desc,sub:t.sub,val:''},{desc:'',sub:t.sub,val:''}];
-  document.getElementById('split-original-desc').textContent=t.desc;
-  document.getElementById('split-original-val').textContent=fmt(parseFloat(t.val)||0);
-  document.getElementById('split-original-val').dataset.total=t.val;
-  renderSplitParts();
-  document.getElementById('split-modal').classList.add('open');
-}
-
-function renderSplitParts() {
-  const total=parseFloat(document.getElementById('split-original-val').dataset.total)||0;
-  const used=splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
-  const rem=total-used;
-  document.getElementById('split-remaining').textContent=`Restante: ${fmt(rem)} de ${fmt(total)}`;
-  document.getElementById('split-remaining').style.color=Math.abs(rem)<0.01?'var(--green)':rem<0?'var(--red)':'var(--muted)';
-  document.getElementById('split-parts').innerHTML=splitParts.map((p,i)=>`
-    <div class="split-part">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted2)">Parte ${i+1}</div>
-        ${splitParts.length>2?`<span onclick="removeSplitPart(${i})" style="font-size:18px;color:var(--muted);cursor:pointer">×</span>`:''}
-      </div>
-      <div class="manual-field" style="margin-bottom:6px"><label>Descrição</label>
-        <input type="text" value="${p.desc}" oninput="splitParts[${i}].desc=this.value" placeholder="Ex: Mercado">
-      </div>
-      <div style="display:flex;gap:8px">
-        <div class="manual-field" style="flex:1;margin-bottom:0"><label>Categoria</label>
-          <select onchange="splitParts[${i}].sub=this.value">
-            ${ALL_SUBS.map(s=>`<option value="${s}" ${s===p.sub?'selected':''}>${s}</option>`).join('')}
-          </select>
-        </div>
-        <div class="manual-field" style="width:100px;margin-bottom:0"><label>Valor R$</label>
-          <input type="number" value="${p.val}" step="0.01" placeholder="0,00" oninput="splitParts[${i}].val=this.value;renderSplitParts()">
-        </div>
-      </div>
-    </div>`).join('');
-}
-
-function addSplitPart() {
-  const t=STATE.txs.find(x=>x.id===splitTxId);
-  splitParts.push({desc:'',sub:t?.sub||ALL_SUBS[0],val:''});
-  renderSplitParts();
-}
-function removeSplitPart(i){splitParts.splice(i,1);renderSplitParts();}
-
-function saveSplit() {
-  const t=STATE.txs.find(x=>x.id===splitTxId); if(!t) return closeSplit();
-  const total=parseFloat(t.val)||0;
-  const used=splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
-  if(Math.abs(used-total)>0.02){showToast(`Soma (${fmt(used)}) ≠ total (${fmt(total)})`,'warn');return;}
-  STATE.txs=STATE.txs.filter(x=>x.id!==splitTxId);
-  const newTxs=splitParts.map((p,i)=>({...t,id:`${splitTxId}_s${i+1}`,desc:p.desc||t.desc,sub:p.sub,cat:getCat(p.sub),val:String(parseFloat(p.val)||0),obs:`fração ${i+1}/${splitParts.length}`}));
-  STATE.txs=[...STATE.txs,...newTxs];
-  cache.save(STATE.txs);
-  if(isConfigured()){sheetsPost({action:'deleteTx',id:splitTxId}).catch(()=>{});sheetsPost({action:'addTxs',txs:newTxs}).catch(()=>{});}
-  reviewed.approve(splitTxId); newTxs.forEach(tx=>reviewed.approve(tx.id));
-  closeSplit(); refreshAll();
-  showToast(`Dividido em ${splitParts.length} lançamentos ✓`,'ok');
-}
-function closeSplit(){document.getElementById('split-modal').classList.remove('open');splitTxId=null;splitParts=[];}
-
-// ── THRESHOLD ─────────────────────────────────────────
-function openThresholdModal() {
-  document.getElementById('review-threshold-input').value=threshold.get();
-  document.getElementById('review-threshold-modal').classList.add('open');
-}
-function closeThresholdModal(){document.getElementById('review-threshold-modal').classList.remove('open');}
-function setReviewThreshold(){
-  const v=parseFloat(document.getElementById('review-threshold-input').value)||1000;
-  threshold.set(v);
-  closeThresholdModal();
-  renderAjustes();
-}
-
-// ── SEARCH ────────────────────────────────────────────
-let searchFilter='all';
-
-function openSearch(){
-  document.getElementById('search-modal').classList.add('open');
-  setTimeout(()=>document.getElementById('search-input').focus(),100);
-  runSearch();
-}
-function closeSearch(){
-  document.getElementById('search-modal').classList.remove('open');
-  document.getElementById('search-input').value='';
-}
-function setSearchFilter(f){
-  searchFilter=f;
-  document.querySelectorAll('#search-filters .sort-pill').forEach(b=>b.classList.remove('active'));
-  event.target.classList.add('active');
-  runSearch();
-}
-function runSearch(){
-  const q=(document.getElementById('search-input').value||'').trim().toLowerCase();
-  const txs=STATE.txs;
-  let pool=txs;
-  if(searchFilter==='month') pool=txs.filter(t=>t.date&&t.date.startsWith(`2026-${activeMonth}`));
-  if(searchFilter==='uncat') pool=txs.filter(t=>t.sub==='NÃO CATEGORIZADO');
-  let results=pool;
-  if(q) results=pool.filter(t=>(t.desc||'').toLowerCase().includes(q)||(t.sub||'').toLowerCase().includes(q)||(t.obs||'').toLowerCase().includes(q)||String(parseFloat(t.val)||0).includes(q));
-  results=[...results].sort((a,b)=>b.date?.localeCompare(a.date||'')||0);
-  const total=results.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
-  document.getElementById('search-summary').textContent=q||searchFilter!=='all'?`${results.length} resultado${results.length!==1?'s':''} · ${fmt(total)}`:`${pool.length} lançamentos · ${fmt(pool.reduce((s,t)=>s+(parseFloat(t.val)||0),0))}`;
-  if(!results.length){document.getElementById('search-results').innerHTML='<div style="padding:32px;text-align:center;color:var(--muted);font-size:13px">Nenhum resultado</div>';return;}
-  const rev=reviewed.load();
-  document.getElementById('search-results').innerHTML=results.slice(0,100).map(t=>{
-    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'var(--green)':st?'var(--blue)':'var(--border)';
-    return `<div class="search-row" onclick="closeSearch();openEditTx('${t.id}')">
-      <div style="color:${dotC};font-size:13px;width:14px;flex-shrink:0">${dot}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px;display:flex;gap:8px">
-          <span>${t.date}</span><span style="color:var(--blue)">${t.sub}</span>
-          ${t.obs?`<span>${t.obs}</span>`:''}
-        </div>
-      </div>
-      <div style="font-size:13px;font-weight:600;font-feature-settings:'tnum';flex-shrink:0;margin-left:8px;color:var(--text)">${fmt(parseFloat(t.val)||0)}</div>
-    </div>`;
-  }).join('')+(results.length>100?`<div style="padding:12px;text-align:center;font-size:11px;color:var(--muted)">Mostrando 100 de ${results.length}</div>`:'');
-}
-
-
-
-// ── SHEETS ────────────────────────────────────────────
-const isConfigured = () => SHEETS_URL && !SHEETS_URL.includes('COLE_AQUI');
-async function sheetsGet(action) {
-  const r = await fetch(`${SHEETS_URL}?action=${action}`);
-  const j = await r.json(); if (!j.ok) throw new Error(j.error); return j.data;
-}
-async function sheetsPost(body) {
-  const r = await fetch(SHEETS_URL,{method:'POST',body:JSON.stringify(body)});
-  const j = await r.json(); if (!j.ok) throw new Error(j.error); return j;
-}
-
-// ── CACHE ─────────────────────────────────────────────
-const CACHE_KEY = 'pedrozo_txs_v3';
-const REVIEW_KEY = 'pedrozo_reviewed';
-const cache = {
-  load() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)||'[]'); } catch { return []; } },
-  save(t) { localStorage.setItem(CACHE_KEY,JSON.stringify(t)); },
+// ── USER RULES ────────────────────────────────────
+const USER_RULES_KEY = 'jcrp_user_rules';
+const userRules = {
+  load() { try { return JSON.parse(localStorage.getItem(USER_RULES_KEY)||'[]'); } catch { return []; } },
+  save(r) { localStorage.setItem(USER_RULES_KEY, JSON.stringify(r)); },
+  add(kw,sub) { const rules=this.load().filter(r=>r.kw.toUpperCase()!==kw.toUpperCase()); rules.unshift({kw:kw.toUpperCase(),cat:getCat(sub),sub}); this.save(rules); },
+  remove(kw) { this.save(this.load().filter(r=>r.kw.toUpperCase()!==kw.toUpperCase())); }
 };
-const THRESHOLD_KEY = 'pedrozo_review_threshold';
+
+function categorize(desc, type) {
+  const d = desc.toUpperCase();
+  for (const r of userRules.load()) { if (d.includes(r.kw)) return {cat:r.cat,sub:r.sub,pessoa:null}; }
+  const rules = type==='itau'?RULES_ITAU:type==='unicred'?RULES_UNICRED:RULES_CARD;
+  for (const [kw,cat,sub,pessoa] of rules) { if (new RegExp(kw.toUpperCase()).test(d)) return {cat,sub,pessoa}; }
+  return {cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:null};
+}
+
+// ── STORAGE ───────────────────────────────────────
+const cache = {
+  load() { try { return JSON.parse(localStorage.getItem('jcrp_txs')||'[]'); } catch { return []; } },
+  save(txs) { try { localStorage.setItem('jcrp_txs', JSON.stringify(txs)); } catch(e) {} }
+};
 const threshold = {
-  get() { return parseFloat(localStorage.getItem(THRESHOLD_KEY)||'1000'); },
-  set(v) { localStorage.setItem(THRESHOLD_KEY, v); },
+  get() { return parseFloat(localStorage.getItem('jcrp_review_threshold')||'1000'); },
+  set(v) { localStorage.setItem('jcrp_review_threshold', String(v)); }
 };
 const reviewed = {
-  load() { try { return JSON.parse(localStorage.getItem(REVIEW_KEY)||'{}'); } catch { return {}; } },
-  save(r) { localStorage.setItem(REVIEW_KEY,JSON.stringify(r)); },
-  approve(id) { const r=this.load(); r[id]='ok'; this.save(r); },
-  reject(id,newSub) { const r=this.load(); r[id]='edit:'+newSub; this.save(r); },
+  load() { try { return JSON.parse(localStorage.getItem('jcrp_reviewed')||'{}'); } catch { return {}; } },
+  approve(id) { const r=this.load(); r[id]='ok'; localStorage.setItem('jcrp_reviewed',JSON.stringify(r)); }
 };
 
-// ── STATE ─────────────────────────────────────────────
-let STATE = { txs:[], synced:false, error:null };
+// ── STATE ─────────────────────────────────────────
+const STATE = { txs:[], synced:false, error:null };
 
-// ── LOAD ──────────────────────────────────────────────
+// ── SHEETS ────────────────────────────────────────
+const isConfigured = () => SHEETS_URL && SHEETS_URL.includes('script.google.com');
+async function sheetsGet(action) {
+  const r = await fetch(`${SHEETS_URL}?action=${action}`); return r.json();
+}
+async function sheetsPost(body) {
+  const r = await fetch(SHEETS_URL,{method:'POST',body:JSON.stringify(body)}); return r.json();
+}
+
+// ── LOAD ──────────────────────────────────────────
 async function loadData(silent=false) {
   if (!silent) showLoading(true);
   STATE.error = null;
   if (isConfigured()) {
     try {
       let remote = await sheetsGet('getTxs');
-      if (!remote || remote.length===0) {
-        seedData();
-        await sheetsPost({action:'addTxs',txs:cache.load()});
-        remote = await sheetsGet('getTxs');
-        showToast('Dados históricos enviados ao Sheets!','ok');
-      }
-      STATE.txs = remote; STATE.synced = true; cache.save(remote);
+      if (!remote||remote.length===0) { seedData(); await sheetsPost({action:'addTxs',txs:cache.load()}); remote=await sheetsGet('getTxs'); showToast('Dados enviados ao Sheets!','ok'); }
+      STATE.txs=remote; STATE.synced=true; cache.save(remote);
     } catch(e) {
-      STATE.error = 'Offline — cache local'; STATE.txs = cache.load(); STATE.synced = false;
-      if (STATE.txs.length===0) { seedData(); STATE.txs = cache.load(); }
+      STATE.error='Offline'; STATE.txs=cache.load(); STATE.synced=false;
+      if (STATE.txs.length===0) { seedData(); STATE.txs=cache.load(); }
     }
   } else {
-    STATE.txs = cache.load(); STATE.synced = false;
-    if (STATE.txs.length===0) { seedData(); STATE.txs = cache.load(); }
+    STATE.txs=cache.load(); STATE.synced=false;
+    if (STATE.txs.length===0) { seedData(); STATE.txs=cache.load(); }
   }
   if (!silent) showLoading(false);
   refreshAll();
 }
 
-function detectDuplicates(newTxs, existing) {
-  const keys = new Set(existing.map(t=>t.id));
-  const fresh=[], dupes=[], exact=[];
-  newTxs.forEach(t=>{
-    if (keys.has(t.id)) { exact.push(t); return; }
-    // Fuzzy: same val + date within 3 days
-    const fuzzy = existing.find(e=>{
-      if (Math.abs(parseFloat(e.val)-parseFloat(t.val))>0.01) return false;
-      const d1=new Date(e.date), d2=new Date(t.date);
-      return Math.abs(d1-d2) <= 3*86400000;
-    });
-    if (fuzzy) dupes.push({tx:t, similar:fuzzy});
-    else fresh.push(t);
-  });
-  return {fresh, dupes, exact};
-}
-
-async function syncTxs(newTxs) {
-  const all = cache.load();
-  const {fresh} = detectDuplicates(newTxs, all);
-  cache.save([...all,...fresh]); STATE.txs = cache.load();
-  if (isConfigured() && fresh.length>0) {
-    try { const r = await sheetsPost({action:'addTxs',txs:fresh}); return r.added; }
-    catch(e) { STATE.error='Salvo localmente'; }
-  }
-  return fresh.length;
-}
-
-// ── AGGREGATE ─────────────────────────────────────────
-function aggregate(txs, month) {
-  const filtered = month ? txs.filter(t=>t.date&&t.date.startsWith(`2026-${String(month).padStart(2,'0')}`)) : txs;
-  const bySub={}, fixaM={}, varM={};
-  filtered.forEach(t=>{
-    if (!t.sub||t.sub==='nan') return;
-    bySub[t.sub]=(bySub[t.sub]||0)+parseFloat(t.val)||0;
-    const m=t.date?t.date.slice(5,7):'00';
-    const tcat=getCat(t.sub); if (tcat==='Fixa') fixaM[m]=(fixaM[m]||0)+(parseFloat(t.val)||0);
-    else varM[m]=(varM[m]||0)+(parseFloat(t.val)||0);
-  });
-  return {bySub, total:Object.values(bySub).reduce((a,b)=>a+b,0), fixaM, varM};
-}
-
-function byMonthTotals(txs) {
-  const byM={};
-  txs.forEach(t=>{ if (!t.date) return; const m=t.date.slice(5,7); byM[m]=(byM[m]||0)+(parseFloat(t.val)||0); });
-  return byM;
-}
-
-// ── BAR CHART ─────────────────────────────────────────
-function monthBarChart(byM, budgetMonthly) {
-  const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
-  const maxVal=Math.max(...months.map(m=>byM[m]||0), budgetMonthly||0, 1);
-  const hasData=months.some(m=>byM[m]>0);
-  if(!hasData) return '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">Sem dados</div>';
-  return `<div class="bar-chart">${months.map((m,i)=>{
-    const v=byM[m]||0, h=v>0?Math.max((v/maxVal*100),3):0;
-    const over=budgetMonthly&&v>budgetMonthly;
-    const active=v>0;
-    const cls=over?'bar-over':active?'bar-active':'bar-future';
-    return `<div class="bar-col" onclick="${v>0?`selectHomeMonth('${m}')`:''}" style="${v>0?'cursor:pointer':''}">
-      ${v>0?`<div class="bar-val-top">${fmtK(v)}</div>`:'<div class="bar-val-top" style="opacity:0">—</div>'}
-      <div class="bar-wrap">
-        ${budgetMonthly?`<div class="bar-budget-line" style="bottom:${(budgetMonthly/maxVal*100).toFixed(1)}%"></div>`:''}
-        <div class="bar-fill ${cls}" style="height:${h.toFixed(1)}%"></div>
-      </div>
-      <div class="bar-label">${MNAMES[i].slice(0,3)}</div>
-    </div>`;
-  }).join('')}</div>`;
-}
-
-// ── DONUT ─────────────────────────────────────────────
-function donutSVG(segs, cx=60,cy=60,r=46,stroke=10) {
-  const circ=2*Math.PI*r, tot=segs.reduce((a,s)=>a+s.v,0);
-  let off=-circ/4, paths='';
-  segs.forEach(s=>{
-    const dash=tot?(s.v/tot)*circ:0;
-    paths+=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.c}" stroke-width="${stroke}" stroke-dasharray="${dash} ${circ-dash}" stroke-dashoffset="${off}" stroke-linecap="butt"/>`;
-    off-=dash;
-  });
-  return `<svg width="${cx*2}" height="${cy*2}" viewBox="0 0 ${cx*2} ${cy*2}" style="flex-shrink:0">
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#F0F0F5" stroke-width="${stroke}"/>${paths}</svg>`;
-}
-
-// ── UI HELPERS ────────────────────────────────────────
-function showLoading(on) { document.getElementById('loading-bar').style.display=on?'block':'none'; }
+// ── UI HELPERS ────────────────────────────────────
+function showLoading(on) { const el=document.getElementById('loading-bar'); if(el) el.style.display=on?'block':'none'; }
 function showToast(msg,type='info') {
-  const t=document.getElementById('toast');
-  t.textContent=msg; t.className=`toast toast-${type} show`;
-  setTimeout(()=>t.classList.remove('show'),3200);
+  let t=document.getElementById('toast');
+  if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t);}
+  t.textContent=msg; t.className='toast toast-'+type+' show';
+  clearTimeout(t._timer); t._timer=setTimeout(()=>t.classList.remove('show'),2500);
 }
 function setSyncBadge() {
-  const el=document.getElementById('sync-badge');
-  if (!isConfigured()) { el.textContent='○ Local'; el.className='sync-badge local'; }
-  else if (STATE.synced) { el.textContent='● Sync'; el.className='sync-badge synced'; }
-  else { el.textContent='◌ Offline'; el.className='sync-badge offline'; }
-  if (STATE.error) showToast(STATE.error,'warn');
+  const b=document.getElementById('sync-badge');
+  if(!b) return;
+  b.textContent=STATE.synced?'● Sheets':'○ Local';
+  b.className='sync-badge '+(STATE.synced?'synced':'local');
 }
 function updateReviewBadge() {
-  const rev=reviewed.load(), pending=STATE.txs.filter(t=>!rev[t.id]).length;
-  const el=document.getElementById('review-badge');
-  if (el) { el.textContent=pending>0?pending:''; el.style.display=pending>0?'flex':'none'; }
+  const rev=reviewed.load(), minVal=threshold.get();
+  const n=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal).length;
+  const b=document.getElementById('review-badge');
+  if(b){b.style.display=n>0?'flex':'none';b.textContent=n>9?'9+':n;}
 }
+
+// ── AGGREGATE ─────────────────────────────────────
+function aggregate(txs, month) {
+  const filtered=month?txs.filter(t=>t.date&&t.date.startsWith('2026-'+String(month).padStart(2,'0'))):txs;
+  const bySub={},fixaM={},varM={};
+  filtered.forEach(t=>{
+    if(!t.sub||t.sub==='nan') return;
+    bySub[t.sub]=(bySub[t.sub]||0)+(parseFloat(t.val)||0);
+    const m=t.date?t.date.slice(5,7):'00';
+    if(getCat(t.sub)==='Fixa') fixaM[m]=(fixaM[m]||0)+(parseFloat(t.val)||0);
+    else varM[m]=(varM[m]||0)+(parseFloat(t.val)||0);
+  });
+  return {bySub,total:Object.values(bySub).reduce((a,b)=>a+b,0),fixaM,varM};
+}
+function byMonthTotals(txs) {
+  const r={};
+  txs.forEach(t=>{ const m=t.date?t.date.slice(5,7):null; if(m) r[m]=(r[m]||0)+(parseFloat(t.val)||0); });
+  return r;
+}
+
+// ── BAR CHART ─────────────────────────────────────
+function monthBarChart(byM, budgetMonthly) {
+  const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
+  const maxVal=Math.max(...months.map(m=>byM[m]||0),budgetMonthly||0,1);
+  if(!months.some(m=>byM[m]>0)) return '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">Sem dados</div>';
+  return '<div class="bar-chart">'+months.map((m,i)=>{
+    const v=byM[m]||0,h=v>0?Math.max((v/maxVal*100),3):0;
+    const over=budgetMonthly&&v>budgetMonthly,active=v>0;
+    const cls=over?'bar-over':active?'bar-active':'bar-future';
+    return '<div class="bar-col">'+
+      (v>0?'<div class="bar-val-top">'+fmtK(v)+'</div>':'<div class="bar-val-top" style="opacity:0">—</div>')+
+      '<div class="bar-wrap">'+
+      (budgetMonthly?'<div class="bar-budget-line" style="bottom:'+((budgetMonthly/maxVal*100).toFixed(1))+'%"></div>':'')+
+      '<div class="bar-fill '+cls+'" style="height:'+h.toFixed(1)+'%"></div>'+
+      '</div>'+
+      '<div class="bar-label">'+MNAMES[i].slice(0,1)+'</div>'+
+      '</div>';
+  }).join('')+'</div>';
+}
+
+// ── DONUT ─────────────────────────────────────────
+function donutSVG(segs,cx=60,cy=60,r=46,stroke=10) {
+  const circ=2*Math.PI*r,tot=segs.reduce((a,s)=>a+s.v,0);
+  let off=-circ/4,paths='';
+  segs.forEach(s=>{
+    const dash=tot?(s.v/tot)*circ:0;
+    paths+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+s.c+'" stroke-width="'+stroke+'" stroke-dasharray="'+dash+' '+(circ-dash)+'" stroke-dashoffset="'+off+'" stroke-linecap="butt"/>';
+    off-=dash;
+  });
+  return '<svg width="'+(cx*2)+'" height="'+(cy*2)+'" viewBox="0 0 '+(cx*2)+' '+(cy*2)+'" style="flex-shrink:0"><circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="#F0F0F5" stroke-width="'+stroke+'"/>'+paths+'</svg>';
+}
+
+// ── REFRESH ───────────────────────────────────────
 function refreshAll() {
   setSyncBadge(); updateReviewBadge();
   const active=document.querySelector('.screen.active')?.id?.replace('screen-','');
@@ -637,389 +233,170 @@ function refreshAll() {
   if (active==='ajustes')     renderAjustes();
 }
 
-// ── HOME ──────────────────────────────────────────────
+// ── HOME ──────────────────────────────────────────
 function renderHome() {
-  const txs = STATE.txs;
-  const months = [...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].sort();
-  const nMonths = months.length || 1;
-  const acum = txs.reduce((s,t)=>s+(parseFloat(t.val)||0), 0);
-  const budMensal = Object.values(BUDGET).reduce((a,b)=>a+b, 0);
-  const budAcum = budMensal * nMonths;
-  const pctUsado = budAcum ? Math.min((acum/budAcum)*100, 999) : 0;
-  const saldo = budAcum - acum;
-  const over = acum > budAcum;
-  const rev = reviewed.load();
-  const minVal = threshold.get();
-  const pending = txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal).length;
+  const txs=STATE.txs;
+  const months=[...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].sort();
+  const nMonths=months.length||1;
+  const acum=txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  const budMensal=Object.values(BUDGET).reduce((a,b)=>a+b,0);
+  const budAcum=budMensal*nMonths;
+  const pctUsado=budAcum?Math.min((acum/budAcum)*100,999):0;
+  const saldo=budAcum-acum, over=acum>budAcum;
 
-  // Top 5 categorias acumuladas
-  const allSubs = {};
-  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
-  const top5 = Object.entries(allSubs).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const maxV = top5[0]?.[1] || 1;
-
-  // Meses
-  const monthCards = months.map(ym => {
-    const m = parseInt(ym.slice(5));
-    const ag = aggregate(txs, m);
-    const ov = ag.total > budMensal;
-    return { m, ym, ag, ov };
-  });
-
-  // Evolução barras (só meses com dados)
-  const byM = byMonthTotals(txs);
-  const allMonths = ['01','02','03','04','05','06','07','08','09','10','11','12'];
-  const barMax = Math.max(...allMonths.map(m=>byM[m]||0), budMensal, 1);
-
-  // Alertas compactos
-  const alerts = [];
-  // Badge on ajustes tab handles pending — no need to duplicate in alerts
-  top5.filter(([n,v])=>BUDGET[n]&&v>BUDGET[n]*nMonths).forEach(([n])=>alerts.push(`${n} acima do orçado`));
-
-  document.getElementById('home-dashboard').innerHTML = `
-    <div class="dash-wrap">
-
-      <!-- 1. ACUMULADO -->
-      <div class="dash-hero">
-        <div class="dash-hero-left">
-          <div class="dash-label">Acumulado 2026</div>
-          <div class="dash-total">${fmt(acum)}</div>
-          <div class="dash-sub">${nMonths} ${nMonths===1?'mês':'meses'} · ${pctUsado.toFixed(0)}% do orçado</div>
-        </div>
-        <div class="dash-hero-right">
-          <div class="dash-saldo-label">${over?'Estouro':'Saldo'}</div>
-          <div class="dash-saldo ${over?'dash-over':''}">${over?'−':'+'} ${fmtK(Math.abs(saldo))}</div>
-        </div>
-      </div>
-      <div class="dash-prog-track">
-        <div class="dash-prog-fill ${over?'dash-prog-over':''}" style="width:${Math.min(pctUsado,100).toFixed(1)}%"></div>
-      </div>
-
-      <!-- 2. MESES -->
-      <div class="dash-months">
-        ${monthCards.map(({m,ag,ov})=>`
-          <div class="dash-month-card ${ov?'dash-month-over':''}" onclick="showScreen('despesas');setMonth('${String(m).padStart(2,'0')}')">
-            <div class="dash-month-name">${MNAMES[m-1]}</div>
-            <div class="dash-month-val">${fmtK(ag.total)}</div>
-            <div class="dash-month-sub">${ov?'▲ estouro':'▼ ok'}</div>
-          </div>`).join('<div class="dash-month-div"></div>')}
-      </div>
-
-      <!-- 3. TOP 5 -->
-      <div class="dash-section-label">Top 5 Categorias</div>
-      <div class="dash-top5">
-        ${top5.map(([name,val],i)=>{
-          const bud = BUDGET[name];
-          const ov = bud && val > bud * nMonths;
-          return `<div class="dash-cat-row" onclick="showScreen('despesas')">
-            <div class="dash-cat-dot" style="background:${COLORS[i]}"></div>
-            <div class="dash-cat-name">${name}</div>
-            <div class="dash-cat-bar-wrap">
-              <div class="dash-cat-bar" style="width:${(val/maxV*100).toFixed(1)}%;background:${ov?'var(--red)':COLORS[i]}"></div>
-            </div>
-            <div class="dash-cat-val ${ov?'dash-over':''}">${fmtK(val)}</div>
-          </div>`;
-        }).join('')}
-      </div>
-
-      <!-- 4. EVOLUÇÃO -->
-      <div class="dash-section-label">Evolução</div>
-      <div class="dash-bars">
-        ${allMonths.map((mo,i)=>{
-          const v = byM[mo]||0;
-          const h = v>0 ? Math.max((v/barMax*100),4) : 0;
-          const ov = v > budMensal;
-          const active = v > 0;
-          return `<div class="dash-bar-col" onclick="${active?`showScreen('despesas');setMonth('${mo}')`:''}" style="${active?'cursor:pointer':''}">
-            <div class="dash-bar-wrap">
-              <div class="dash-budget-line" style="bottom:${(budMensal/barMax*100).toFixed(1)}%"></div>
-              <div class="dash-bar-fill ${ov?'dash-bar-over':active?'dash-bar-active':'dash-bar-empty'}" style="height:${h.toFixed(1)}%"></div>
-            </div>
-            <div class="dash-bar-lbl">${MNAMES[i].slice(0,1)}</div>
-          </div>`;
-        }).join('')}
-      </div>
-
-      <!-- 5. ALERTAS -->
-      ${alerts.length?`<div class="dash-alerts">${alerts.map(a=>`<div class="dash-alert-item">⚠ ${a}</div>`).join('')}</div>`:''}
-
-    </div>`;
-}
-
-
-// ── HOME PIZZA ────────────────────────────────────────
-function renderHomePizza(txs) {
   const allSubs={};
   txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
   const top5=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  const segs=top5.map(([label,v],i)=>({label,v,c:COLORS[i]}));
-  const total=segs.reduce((s,x)=>s+x.v,0);
-  const el=document.getElementById('home-pizza');
-  if(!el) return;
-  el.innerHTML=`<div style="display:flex;align-items:center;gap:16px;position:relative">
-    ${donutSVG(segs,60,60,46,20)}
-    <div style="position:absolute;top:50%;left:60px;transform:translate(-50%,-50%);text-align:center;pointer-events:none">
-      <div style="font-size:8px;color:var(--muted)">TOP 5</div>
-      <div style="font-family:'Cormorant Garamond',serif;font-size:14px;font-weight:400;color:var(--text)">${pctOf(total,txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0))}%</div>
-    </div>
-    <div style="flex:1;display:flex;flex-direction:column;gap:5px">
-      ${segs.map(s=>`<div class="pizza-leg-row" onclick="openDetail('${s.label}')" style="cursor:pointer">
-        <div class="pizza-leg-dot" style="background:${s.c}"></div>
-        <div class="pizza-leg-name">${s.label}</div>
-        <div class="pizza-leg-val">${fmtK(s.v)}</div>
-        <div class="pizza-leg-pct">${pctOf(s.v,total)}</div>
-      </div>`).join('')}
-    </div>
-  </div>`;
+  const maxV=top5[0]?.[1]||1;
+
+  const monthCards=months.map(ym=>{
+    const m=parseInt(ym.slice(5));
+    const ag=aggregate(txs,m);
+    return {m,ym,ag,ov:ag.total>budMensal};
+  });
+
+  const byM=byMonthTotals(txs);
+  const allMonths=['01','02','03','04','05','06','07','08','09','10','11','12'];
+  const barMax=Math.max(...allMonths.map(m=>byM[m]||0),budMensal,1);
+
+  const overCats=top5.filter(([n,v])=>BUDGET[n]&&v>BUDGET[n]*nMonths).map(([n])=>n+' acima do orçado');
+  const alerts=overCats;
+
+  document.getElementById('home-dashboard').innerHTML=
+    '<div class="dash-wrap">'+
+
+    // 1. ACUMULADO
+    '<div class="dash-hero">'+
+      '<div class="dash-hero-left">'+
+        '<div class="dash-label">Acumulado 2026</div>'+
+        '<div class="dash-total">'+fmt(acum)+'</div>'+
+        '<div class="dash-sub">'+nMonths+' '+(nMonths===1?'mês':'meses')+' · '+pctUsado.toFixed(0)+'% do orçado</div>'+
+      '</div>'+
+      '<div class="dash-hero-right">'+
+        '<div class="dash-saldo-label">'+(over?'Estouro':'Saldo')+'</div>'+
+        '<div class="dash-saldo '+(over?'dash-over':'')+'">'+(over?'−':'+')+' '+fmtK(Math.abs(saldo))+'</div>'+
+      '</div>'+
+    '</div>'+
+    '<div class="dash-prog-track"><div class="dash-prog-fill '+(over?'dash-prog-over':'')+'" style="width:'+Math.min(pctUsado,100).toFixed(1)+'%"></div></div>'+
+
+    // 2. MESES
+    '<div class="dash-months">'+
+    monthCards.map(({m,ag,ov},i)=>
+      (i>0?'<div class="dash-month-div"></div>':'')+
+      '<div class="dash-month-card '+(ov?'dash-month-over':'')+'" onclick="showScreen(\'despesas\');setMonth(\''+String(m).padStart(2,'0')+'\')">'+
+        '<div class="dash-month-name">'+MNAMES[m-1].slice(0,3)+'</div>'+
+        '<div class="dash-month-val">'+fmtK(ag.total)+'</div>'+
+        '<div class="dash-month-sub">'+(ov?'▲ estouro':'▼ ok')+'</div>'+
+      '</div>'
+    ).join('')+
+    '</div>'+
+
+    // 3. TOP 5
+    '<div class="dash-section-label">Top 5 Categorias</div>'+
+    '<div class="dash-top5">'+
+    top5.map(([name,val],i)=>{
+      const ov=BUDGET[name]&&val>BUDGET[name]*nMonths;
+      return '<div class="dash-cat-row" onclick="showScreen(\'despesas\')">'+
+        '<div class="dash-cat-dot" style="background:'+COLORS[i]+'"></div>'+
+        '<div class="dash-cat-name">'+name+'</div>'+
+        '<div class="dash-cat-bar-wrap"><div class="dash-cat-bar" style="width:'+(val/maxV*100).toFixed(1)+'%;background:'+(ov?'var(--red)':COLORS[i])+'"></div></div>'+
+        '<div class="dash-cat-val '+(ov?'dash-over':'')+'">'+fmtK(val)+'</div>'+
+      '</div>';
+    }).join('')+
+    '</div>'+
+
+    // 4. EVOLUÇÃO
+    '<div class="dash-section-label">Evolução</div>'+
+    '<div class="dash-bars">'+
+    allMonths.map((mo,i)=>{
+      const v=byM[mo]||0,h=v>0?Math.max((v/barMax*100),4):0;
+      const ov=v>budMensal,active=v>0;
+      return '<div class="dash-bar-col" '+(active?'onclick="showScreen(\'despesas\');setMonth(\''+mo+'\')" style="cursor:pointer"':'')+'>'+
+        '<div class="dash-bar-wrap">'+
+        '<div class="dash-budget-line" style="bottom:'+(budMensal/barMax*100).toFixed(1)+'%"></div>'+
+        '<div class="dash-bar-fill '+(ov?'dash-bar-over':active?'dash-bar-active':'dash-bar-empty')+'" style="height:'+h.toFixed(1)+'%"></div>'+
+        '</div>'+
+        '<div class="dash-bar-lbl">'+MNAMES[i].slice(0,1)+'</div>'+
+      '</div>';
+    }).join('')+
+    '</div>'+
+
+    // 5. ALERTAS
+    (alerts.length?'<div class="dash-alerts">'+alerts.map(a=>'<div class="dash-alert-item">⚠ '+a+'</div>').join('')+'</div>':'')+
+
+    '</div>';
 }
 
-
-// ── REGRAS ────────────────────────────────────────────
-function renderRules() {
-  const rules = userRules.load();
-  const cats = STATE.txs.filter(t=>t.sub==='NÃO CATEGORIZADO').length;
-
-  let html = `<div style="padding:0 16px 12px">
-    <div style="font-size:12px;color:var(--muted2);line-height:1.5;margin-bottom:12px">
-      Palavras-chave que identificam automaticamente a categoria ao importar.
-      ${cats>0?`<span style="color:var(--red);font-weight:600"> ${cats} lançamentos sem categoria.</span>`:''}
-    </div>`;
-
-  // Add new rule form
-  html += `<div style="background:var(--s2);border-radius:10px;padding:12px;margin-bottom:16px;border:1px solid var(--border)">
-    <div style="font-size:11px;font-weight:600;color:var(--muted2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em">Nova Regra</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px">
-      <input id="rule-kw" type="text" placeholder="Palavra-chave (ex: UBER)"
-        style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--s1);color:var(--text);font-family:inherit">
-    </div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <select id="rule-sub" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--s1);color:var(--text);font-family:inherit">
-        ${ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO').map(s=>`<option value="${s}">${s}</option>`).join('')}
-      </select>
-      <button onclick="saveNewRule()" class="btn" style="margin:0;padding:8px 16px;flex-shrink:0">+ Adicionar</button>
-    </div>
-    ${cats>0?`<button onclick="applyAndRefresh()" class="btn" style="margin-top:8px;width:100%;background:var(--green);border:none">
-      ✓ Aplicar regras aos ${cats} lançamentos sem categoria</button>`:''}
-  </div>`;
-
-  // Existing user rules
-  if (rules.length > 0) {
-    html += `<div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Suas Regras (${rules.length})</div>`;
-    html += rules.map(r=>`
-      <div style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border)">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:600;color:var(--text);font-family:monospace">${r.kw}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">→ ${r.sub}</div>
-        </div>
-        <button onclick="removeRule('${r.kw}')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px;line-height:1">×</button>
-      </div>`).join('');
-  }
-
-  // Summary of built-in rules count
-  const builtIn = RULES_CARD.length + RULES_ITAU.length + RULES_UNICRED.length;
-  html += `<div style="margin-top:16px;font-size:11px;color:var(--muted);text-align:center">${builtIn} regras automáticas pré-configuradas</div>`;
-
-  html += `</div>`;
-  document.getElementById('rules-content').innerHTML = html;
-}
-
-function saveNewRule() {
-  const kw = document.getElementById('rule-kw').value.trim().toUpperCase();
-  const sub = document.getElementById('rule-sub').value;
-  if (!kw) { showToast('Digite uma palavra-chave','warn'); return; }
-  userRules.add(kw, sub);
-  document.getElementById('rule-kw').value = '';
-  renderRules();
-  showToast(`Regra "${kw}" → ${sub} salva ✓`, 'ok');
-}
-
-function removeRule(kw) {
-  userRules.remove(kw);
-  renderRules();
-  showToast(`Regra "${kw}" removida`, 'ok');
-}
-
-function applyAndRefresh() {
-  const n = applyUserRulesToAll();
-  showToast(`${n} lançamentos categorizados ✓`, 'ok');
-  refreshAll();
-}
-
-
-// ── BUSCA GLOBAL ──────────────────────────────────────
-
-function openSearch() {
-  document.getElementById('search-modal').classList.add('open');
-  setTimeout(()=>document.getElementById('search-input').focus(), 100);
-  runSearch();
-}
-
-function closeSearch() {
-  document.getElementById('search-modal').classList.remove('open');
-  document.getElementById('search-input').value = '';
-}
-
-function setSearchFilter(f) {
-  searchFilter = f;
-  document.querySelectorAll('#search-filters .sort-pill').forEach(b=>b.classList.remove('active'));
-  event.target.classList.add('active');
-  runSearch();
-}
-
-function runSearch() {
-  const q = (document.getElementById('search-input').value || '').trim().toLowerCase();
-  const txs = STATE.txs;
-  const curMonth = typeof activeMonth !== 'undefined' ? activeMonth : '01';
-
-  let pool = txs;
-  if (searchFilter === 'month') pool = txs.filter(t=>t.date&&t.date.startsWith(`2026-${curMonth}`));
-  if (searchFilter === 'uncat') pool = txs.filter(t=>t.sub==='NÃO CATEGORIZADO');
-
-  let results = pool;
-  if (q) {
-    results = pool.filter(t => {
-      const val = String(parseFloat(t.val)||0);
-      return (t.desc||'').toLowerCase().includes(q)
-        || (t.sub||'').toLowerCase().includes(q)
-        || (t.obs||'').toLowerCase().includes(q)
-        || val.includes(q);
-    });
-  }
-
-  // Sort by date desc
-  results = [...results].sort((a,b)=>b.date?.localeCompare(a.date||'')||0);
-
-  const total = results.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
-  document.getElementById('search-summary').textContent =
-    q || searchFilter!=='all'
-      ? `${results.length} resultado${results.length!==1?'s':''} · ${fmt(total)}`
-      : `${pool.length} lançamentos · ${fmt(pool.reduce((s,t)=>s+(parseFloat(t.val)||0),0))}`;
-
-  if (!results.length) {
-    document.getElementById('search-results').innerHTML =
-      `<div style="padding:32px;text-align:center;color:var(--muted);font-size:13px">Nenhum resultado encontrado</div>`;
-    return;
-  }
-
-  const rev = reviewed.load();
-  document.getElementById('search-results').innerHTML = results.slice(0,100).map(t=>{
-    const st = rev[t.id], dot = st==='ok'?'✓':st?'✎':'·';
-    const dotC = st==='ok'?'var(--green)':st?'var(--blue)':'var(--border)';
-    const over = BUDGET[t.sub] && parseFloat(t.val) > BUDGET[t.sub];
-    return `<div class="search-row" onclick="closeSearch();openEditTx('${t.id}')">
-      <div style="color:${dotC};font-size:13px;width:14px;flex-shrink:0">${dot}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px;display:flex;gap:8px">
-          <span>${t.date}</span>
-          <span style="color:var(--blue)">${t.sub}</span>
-          ${t.obs?`<span style="color:var(--muted2)">${t.obs}</span>`:''}
-        </div>
-      </div>
-      <div style="font-size:13px;font-weight:600;color:${over?'var(--red)':'var(--text)'};font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
-    </div>`;
-  }).join('') + (results.length>100?`<div style="padding:12px;text-align:center;font-size:11px;color:var(--muted)">Mostrando 100 de ${results.length} resultados — refine a busca</div>`:'');
-}
-
-// ── DESPESAS ──────────────────────────────────────────
+// ── DESPESAS ──────────────────────────────────────
 let activeMonth='01';
 let despSort='valor_desc';
 
-function openDetailCat(tipo) {
-  const txs=STATE.txs, m=parseInt(activeMonth);
-  const filtered=txs.filter(t=>{
-    if(!t.date||!t.date.startsWith(`2026-${activeMonth}`)) return false;
-    return tipo==='fixa'?getCat(t.sub)==='Fixa':getCat(t.sub)!=='Fixa';
-  });
-  const total=filtered.reduce((a,t)=>a+(parseFloat(t.val)||0),0);
-  document.getElementById('detail-title').textContent=tipo==='fixa'?'Despesas Fixas':'Despesas Variáveis';
-  document.getElementById('detail-total').textContent=fmt(total)+' · '+filtered.length+' lançamentos';
-  document.getElementById('detail-chart').innerHTML='';
-  const rev=reviewed.load();
-  document.getElementById('detail-list').innerHTML=filtered.sort((a,b)=>b.val-a.val).map(t=>{
-    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'#1A8C5B':st?'#A67C2E':'#ccc';
-    return `<div class="detail-row" onclick="openEditTx('${t.id}')" style="cursor:pointer">
-      <div style="color:${dotC};font-size:14px;width:16px;flex-shrink:0">${dot}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:2px">${t.date} · ${t.sub}</div>
-      </div>
-      <div style="font-size:12px;font-feature-settings:'tnum';flex-shrink:0;margin-left:8px">${fmt(parseFloat(t.val)||0)}</div>
-    </div>`;
-  }).join('');
-  document.getElementById('detail-modal').classList.add('open');
-}
-
 function renderDespesas() {
   const txs=STATE.txs, m=parseInt(activeMonth), ag=aggregate(txs,m), total=ag.total;
+
   document.getElementById('month-pills').innerHTML=
     ['01','02','03','04','05','06','07','08','09','10','11','12']
-    .map(mo=>`<div class="pill ${mo===activeMonth?'active':''}" onclick="setMonth('${mo}')">${MNAMES[parseInt(mo)-1]}</div>`).join('');
+    .map(mo=>'<div class="pill '+(mo===activeMonth?'active':'')+'" onclick="setMonth(\''+mo+'\')">'+MNAMES[parseInt(mo)-1]+'</div>').join('');
+
   document.getElementById('desp-kpi-total').textContent=fmt(total);
-  const fixa=ag.fixaM[activeMonth]||0, vari=ag.varM[activeMonth]||0;
-  document.getElementById('desp-kpi-fixa').textContent=fmt(fixa);
-  document.getElementById('desp-kpi-var').textContent=fmt(vari);
+  document.getElementById('desp-kpi-fixa').textContent=fmt(ag.fixaM[activeMonth]||0);
+  document.getElementById('desp-kpi-var').textContent=fmt(ag.varM[activeMonth]||0);
 
   const entries=Object.entries(ag.bySub).filter(([k])=>k!=='NÃO CATEGORIZADO');
   let sorted;
-  if (despSort==='valor_desc') sorted=[...entries].sort((a,b)=>b[1]-a[1]);
-  else if (despSort==='valor_asc') sorted=[...entries].sort((a,b)=>a[1]-b[1]);
-  else if (despSort==='alpha') sorted=[...entries].sort((a,b)=>a[0].localeCompare(b[0]));
-  else if (despSort==='budget_pct') sorted=[...entries].sort((a,b)=>{
-    const pa=BUDGET[a[0]]?a[1]/BUDGET[a[0]]:0, pb=BUDGET[b[0]]?b[1]/BUDGET[b[0]]:0;
-    return pb-pa;
+  if      (despSort==='valor_desc')  sorted=[...entries].sort((a,b)=>b[1]-a[1]);
+  else if (despSort==='valor_asc')   sorted=[...entries].sort((a,b)=>a[1]-b[1]);
+  else if (despSort==='alpha')       sorted=[...entries].sort((a,b)=>a[0].localeCompare(b[0]));
+  else if (despSort==='budget_pct')  sorted=[...entries].sort((a,b)=>{
+    const pa=BUDGET[a[0]]?a[1]/BUDGET[a[0]]:0,pb=BUDGET[b[0]]?b[1]/BUDGET[b[0]]:0; return pb-pa;
   });
   else sorted=[...entries].sort((a,b)=>b[1]-a[1]);
 
   document.getElementById('desp-table').innerHTML=sorted.length
     ? sorted.map(([name,val],i)=>{
-      const bud=BUDGET[name], over=bud&&val>bud;
+      const bud=BUDGET[name],over=bud&&val>bud;
       const pctBud=bud?(val/bud*100):null;
       const pctTotal=(val/total*100);
       const barW=bud?Math.min(pctBud,100):0;
-      const overExtra=bud&&val>bud?Math.min(((val-bud)/bud*100),100):0;
-      const monthTxsForCat=STATE.txs.filter(t=>t.date&&t.date.startsWith(`2026-${activeMonth}`)&&t.sub===name);
-      return `<div class="cat-row-wrap">
-        <div class="cat-row-header" onclick="toggleCatRow('catrow-${i}','${name}')">
-          <div class="crh-top">
-            <div class="crh-name">${name}</div>
-            <div class="crh-right">
-              <div class="crh-val ${over?'crh-over':''}">${fmt(val)}</div>
-              <div id="arrow-${i}" class="crh-arrow">▼</div>
-            </div>
-          </div>
-          <div class="crh-meta">
-            <div class="crh-meta-left">
-              ${bud
-                ?`<span class="crh-bud-label">Orç: ${fmt(bud)}</span>
-                  <span class="crh-bud-sep">·</span>
-                  <span class="crh-bud-pct ${over?'crh-over':pctBud>80?'crh-warn':''}">${pctBud.toFixed(0)}% usado</span>`
-                :`<span class="crh-bud-label" style="color:var(--muted)">Sem orçamento</span>`}
-            </div>
-            <div class="crh-rel">${pctTotal.toFixed(0)}% do mês · ${monthTxsForCat.length} lanç.</div>
-          </div>
-          <div class="crh-bar-track">
-            <div class="crh-bar-fill ${over?'crh-bar-over':''}" style="width:${barW.toFixed(1)}%"></div>
-            ${over?`<div class="crh-bar-extra" style="width:${overExtra.toFixed(1)}%"></div>`:''}
-          </div>
-        </div>
-        <div id="catrow-${i}" class="cat-row-detail" style="display:none">
-          ${monthTxsForCat.sort((a,b)=>parseFloat(b.val)-parseFloat(a.val)).map(t=>`
-            <div class="cat-sub-row" onclick="openEditTx('${t.id}')">
-              <div style="flex:1;min-width:0">
-                <div style="font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${t.desc}</div>
-                <div style="font-size:10px;color:var(--muted);margin-top:1px">${t.date}</div>
-              </div>
-              <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-                <div style="font-size:11px;font-weight:600;color:var(--text);font-feature-settings:'tnum'">${fmt(parseFloat(t.val)||0)}</div>
-                <div style="font-size:9px;color:var(--blue);border:1px solid var(--border);border-radius:3px;padding:1px 4px" onclick="event.stopPropagation();openSplit('${t.id}')">÷</div>
-              </div>
-            </div>`).join('')}
-          <div style="padding:8px 12px">
-            <button onclick="openDetail('${name}')" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0">Ver todos →</button>
-          </div>
-        </div>
-      </div>`;
+      const monthTxs=txs.filter(t=>t.date&&t.date.startsWith('2026-'+activeMonth)&&t.sub===name);
+      return '<div class="cat-row-wrap">'+
+        '<div class="cat-row-header" onclick="toggleCatRow(\'catrow-'+i+'\',\''+name+'\')">'+
+          '<div class="crh-top">'+
+            '<div class="crh-name">'+name+'</div>'+
+            '<div class="crh-right">'+
+              '<div class="crh-val '+(over?'crh-over':'')+'">'+fmt(val)+'</div>'+
+              '<div id="arrow-'+i+'" class="crh-arrow">▼</div>'+
+            '</div>'+
+          '</div>'+
+          '<div class="crh-meta">'+
+            '<div class="crh-meta-left">'+
+              (bud
+                ?'<span class="crh-bud-label">Orç: '+fmt(bud)+'</span><span class="crh-bud-sep">·</span><span class="crh-bud-pct '+(over?'crh-over':pctBud>80?'crh-warn':'')+'">'+pctBud.toFixed(0)+'% usado</span>'
+                :'<span class="crh-bud-label" style="color:var(--muted)">Sem orçamento</span>')+
+            '</div>'+
+            '<div class="crh-rel">'+pctTotal.toFixed(0)+'% do mês · '+monthTxs.length+' lanç.</div>'+
+          '</div>'+
+          '<div class="crh-bar-track">'+
+            '<div class="crh-bar-fill '+(over?'crh-bar-over':'')+'" style="width:'+barW.toFixed(1)+'%"></div>'+
+            (over?'<div class="crh-bar-extra" style="width:'+Math.min(((val-bud)/bud*100),100).toFixed(1)+'%"></div>':'')+
+          '</div>'+
+        '</div>'+
+        '<div id="catrow-'+i+'" class="cat-row-detail" style="display:none">'+
+          monthTxs.sort((a,b)=>parseFloat(b.val)-parseFloat(a.val)).map(t=>
+            '<div class="cat-sub-row" onclick="openEditTx(\''+t.id+'\')">'+
+              '<div style="flex:1;min-width:0">'+
+                '<div style="font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+t.desc+'</div>'+
+                '<div style="font-size:10px;color:var(--muted);margin-top:1px">'+t.date+'</div>'+
+              '</div>'+
+              '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">'+
+                '<div style="font-size:11px;font-weight:600;color:var(--text);font-feature-settings:\'tnum\'">'+fmt(parseFloat(t.val)||0)+'</div>'+
+                '<div style="font-size:9px;color:var(--blue);border:1px solid var(--border);border-radius:3px;padding:1px 4px" onclick="event.stopPropagation();openSplit(\''+t.id+'\')">÷</div>'+
+              '</div>'+
+            '</div>'
+          ).join('')+
+          '<div style="padding:8px 12px"><button onclick="openDetail(\''+name+'\')" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0">Ver todos →</button></div>'+
+        '</div>'+
+      '</div>';
     }).join('')
     : '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">Sem dados para este mês</div>';
 }
@@ -1047,27 +424,23 @@ function setDespSort(col) {
   renderDespesas();
 }
 
-// ── COMPARATIVO ────────────────────────────────────────
-let cmpView='mensal';
-let cmpMensalSort='total_desc';
-let cmpAnualSort='spent_desc';
+// ── COMPARATIVO ───────────────────────────────────
+let cmpView='mensal', cmpMensalSort='total_desc', cmpAnualSort='spent_desc';
 
 function renderComparativo() {
   const txs=STATE.txs;
-  if(cmpView==='mensal') renderCmpMensal(txs);
-  else renderCmpAnual(txs);
+  if(cmpView==='mensal') renderCmpMensal(txs); else renderCmpAnual(txs);
   const byM=byMonthTotals(txs);
   const budMensal=Object.values(BUDGET).reduce((a,b)=>a+b,0);
   document.getElementById('cmp-barchart').innerHTML=monthBarChart(byM,budMensal);
   const acum=txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
   const fixa=txs.filter(t=>getCat(t.sub)==='Fixa').reduce((s,t)=>s+(parseFloat(t.val)||0),0);
-  const vari=acum-fixa;
-  const segs=[{label:'Fixas',v:fixa,c:'var(--blue)'},{label:'Variáveis',v:vari,c:'var(--gold)'}];
+  const segs=[{label:'Fixas',v:fixa,c:'var(--blue)'},{label:'Variáveis',v:acum-fixa,c:'var(--gold)'}];
   document.getElementById('cmp-donut').innerHTML=segs[0].v>0
-    ?donutSVG(segs,50,50,38,14)+`<div class="donut-legend-v">${segs.map(s=>`
-      <div class="donut-leg-item"><div class="donut-leg-dot" style="background:${s.c}"></div>
-      <div class="donut-leg-name">${s.label}</div><div class="donut-leg-val">${fmtK(s.v)}</div>
-      <div class="donut-leg-pct">${pctOf(s.v,acum)}</div></div>`).join('')}</div>`:'';
+    ?donutSVG(segs,50,50,38,14)+'<div class="donut-legend-v">'+segs.map(s=>
+      '<div class="donut-leg-item"><div class="donut-leg-dot" style="background:'+s.c+'"></div>'+
+      '<div class="donut-leg-name">'+s.label+'</div><div class="donut-leg-val">'+fmtK(s.v)+'</div>'+
+      '<div class="donut-leg-pct">'+pctOf(s.v,acum)+'</div></div>').join('')+'</div>':'';
 }
 
 function setCmpView(v) {
@@ -1080,55 +453,34 @@ function setCmpView(v) {
 function renderCmpMensal(txs) {
   const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
   const allSubs={};
-  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO'){
-    if(!allSubs[t.sub])allSubs[t.sub]={};
-    const m=t.date?t.date.slice(5,7):'00';
-    allSubs[t.sub][m]=(allSubs[t.sub][m]||0)+(parseFloat(t.val)||0);
-  }});
+  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO'){if(!allSubs[t.sub])allSubs[t.sub]={};const m=t.date?t.date.slice(5,7):'00';allSubs[t.sub][m]=(allSubs[t.sub][m]||0)+(parseFloat(t.val)||0);}});
   const activeMths=months.filter(m=>Object.values(allSubs).some(mv=>mv[m]));
   let entries=Object.entries(allSubs);
   const getTotal=([,mv])=>Object.values(mv).reduce((x,y)=>x+y,0);
-  const [sc,sd]=cmpMensalSort.split('_'); const desc=sd==='desc';
+  const [sc,sd]=cmpMensalSort.split('_'),desc=sd==='desc';
   if(sc==='alpha') entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
   else if(sc==='budget') entries.sort((a,b)=>desc?(BUDGET[b[0]]||0)-(BUDGET[a[0]]||0):(BUDGET[a[0]]||0)-(BUDGET[b[0]]||0));
   else if(sc==='total') entries.sort((a,b)=>desc?getTotal(b)-getTotal(a):getTotal(a)-getTotal(b));
-  else if(sc==='pct') entries.sort((a,b)=>{
-    const pa=BUDGET[a[0]]?getTotal(a)/BUDGET[a[0]]:0,pb=BUDGET[b[0]]?getTotal(b)/BUDGET[b[0]]:0;
-    return desc?pb-pa:pa-pb;
-  });
-  else {
-    const mo=sc.replace('month','');
-    entries.sort((a,b)=>desc?(b[1][mo]||0)-(a[1][mo]||0):(a[1][mo]||0)-(b[1][mo]||0));
-  }
+  else if(sc==='pct') entries.sort((a,b)=>{const pa=BUDGET[a[0]]?getTotal(a)/BUDGET[a[0]]:0,pb=BUDGET[b[0]]?getTotal(b)/BUDGET[b[0]]:0;return desc?pb-pa:pa-pb;});
+  else{const mo=sc.replace('month','');entries.sort((a,b)=>desc?(b[1][mo]||0)-(a[1][mo]||0):(a[1][mo]||0)-(b[1][mo]||0));}
   const si=col=>{const[c2,d2]=cmpMensalSort.split('_');if(c2!==col)return'<span style="color:var(--muted);font-size:8px">↕</span>';return d2==='desc'?'↓':'↑';};
-  const CAT_W=108,BUD_W=54,M_W=54,TOT_W=60,PCT_W=44;
-  let html=`<div class="cmp-scroll-wrap"><table class="bud-table">
-    <colgroup>
-      <col style="width:${CAT_W}px;min-width:${CAT_W}px">
-      <col style="width:${BUD_W}px;min-width:${BUD_W}px">
-      ${activeMths.map(()=>`<col style="width:${M_W}px;min-width:${M_W}px">`).join('')}
-      <col style="width:${TOT_W}px;min-width:${TOT_W}px">
-      <col style="width:${PCT_W}px;min-width:${PCT_W}px">
-    </colgroup>
-    <thead><tr>
-      <th class="bud-cat th-sort" onclick="setCmpMensalSort('alpha')">Cat ${si('alpha')}</th>
-      <th class="bud-bud th-sort" onclick="setCmpMensalSort('budget')">Orç ${si('budget')}</th>
-      ${activeMths.map(m=>`<th class="bud-m th-sort" onclick="setCmpMensalSort('month${m}')">${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][parseInt(m)-1]} ${si('month'+m)}</th>`).join('')}
-      <th class="bud-tot th-sort" onclick="setCmpMensalSort('total')">Total ${si('total')}</th>
-      <th class="bud-m th-sort" onclick="setCmpMensalSort('pct')">% ${si('pct')}</th>
-    </tr></thead><tbody>`;
+  const MN=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  let html='<div class="cmp-scroll-wrap"><table class="bud-table"><colgroup><col style="width:108px;min-width:108px"><col style="width:54px;min-width:54px">'+activeMths.map(()=>'<col style="width:54px;min-width:54px">').join('')+'<col style="width:60px;min-width:60px"><col style="width:44px;min-width:44px"></colgroup><thead><tr>'+
+    '<th class="bud-cat th-sort" onclick="setCmpMensalSort(\'alpha\')">Cat '+si('alpha')+'</th>'+
+    '<th class="bud-bud th-sort" onclick="setCmpMensalSort(\'budget\')">Orç '+si('budget')+'</th>'+
+    activeMths.map(m=>'<th class="bud-m th-sort" onclick="setCmpMensalSort(\'month'+m+'\')">'+MN[parseInt(m)-1]+' '+si('month'+m)+'</th>').join('')+
+    '<th class="bud-tot th-sort" onclick="setCmpMensalSort(\'total\')">Total '+si('total')+'</th>'+
+    '<th class="bud-m th-sort" onclick="setCmpMensalSort(\'pct\')">% '+si('pct')+'</th>'+
+    '</tr></thead><tbody>';
   entries.forEach(([sub,byMonth])=>{
     const bud=BUDGET[sub]||0,total=Object.values(byMonth).reduce((a,b)=>a+b,0);
     const pct=bud?(total/bud*100).toFixed(0):null,over=bud&&total>bud;
-    html+=`<tr onclick="openDetail('${sub}')">
-      <td class="bud-cat">${sub}</td>
-      <td class="bud-bud" style="text-align:right;color:var(--muted)">${bud?fmtK(bud):'—'}</td>
-      ${activeMths.map(m=>{const v=byMonth[m]||0,ov=bud&&v>bud;return`<td class="bud-m ${ov?'cell-over':v>0?'cell-ok':'cell-empty'}" style="text-align:right">${v>0?fmtK(v):'—'}</td>`;}).join('')}
-      <td class="bud-tot" style="text-align:right;color:${over?'var(--red)':'var(--text)'}">${fmtK(total)}</td>
-      <td class="bud-m" style="text-align:right">${pct?`<span style="font-size:10px;font-weight:600;color:${over?'var(--red)':parseInt(pct)>80?'#C07010':'var(--green)'}">${pct}%</span>`:'—'}</td>
-    </tr>`;
+    html+='<tr onclick="openDetail(\''+sub+'\')"><td class="bud-cat">'+sub+'</td><td class="bud-bud" style="text-align:right;color:var(--muted)">'+(bud?fmtK(bud):'—')+'</td>'+
+      activeMths.map(m=>{const v=byMonth[m]||0,ov=bud&&v>bud;return'<td class="bud-m '+(ov?'cell-over':v>0?'cell-ok':'cell-empty')+'" style="text-align:right">'+(v>0?fmtK(v):'—')+'</td>';}).join('')+
+      '<td class="bud-tot" style="text-align:right;color:'+(over?'var(--red)':'var(--text)')+'">'+fmtK(total)+'</td>'+
+      '<td class="bud-m" style="text-align:right">'+(pct?'<span style="font-size:10px;font-weight:600;color:'+(over?'var(--red)':parseInt(pct)>80?'#C07010':'var(--green)')+'">'+pct+'%</span>':'—')+'</td></tr>';
   });
-  html+=`</tbody></table></div>`;
+  html+='</tbody></table></div>';
   document.getElementById('cmp-rows').innerHTML=html;
 }
 
@@ -1139,40 +491,32 @@ function setCmpMensalSort(col) {
 }
 
 function renderCmpAnual(txs) {
-  const nMonths=[...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].length||1;
   const allSubs={};
   txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
   let entries=Object.entries(allSubs);
-  const[sc,sd]=cmpAnualSort.split('_');const desc=sd==='desc';
+  const[sc,sd]=cmpAnualSort.split('_'),desc=sd==='desc';
   if(sc==='alpha') entries.sort((a,b)=>desc?a[0].localeCompare(b[0]):b[0].localeCompare(a[0]));
   else if(sc==='budget') entries.sort((a,b)=>desc?((BUDGET[b[0]]||0)*12)-((BUDGET[a[0]]||0)*12):((BUDGET[a[0]]||0)*12)-((BUDGET[b[0]]||0)*12));
   else if(sc==='spent') entries.sort((a,b)=>desc?b[1]-a[1]:a[1]-b[1]);
-  else if(sc==='saldo') entries.sort((a,b)=>{const sa=(BUDGET[a[0]]||0)*12-a[1],sb=(BUDGET[b[0]]||0)*12-b[1];return desc?sa-sb:sb-sa;});
-  else if(sc==='pct') entries.sort((a,b)=>{
-    const pa=BUDGET[a[0]]?a[1]/((BUDGET[a[0]]||0)*12):0,pb=BUDGET[b[0]]?b[1]/((BUDGET[b[0]]||0)*12):0;
-    return desc?pb-pa:pa-pb;
-  });
+  else if(sc==='saldo'){const sa=(BUDGET[a]||0)*12-a,sb=(BUDGET[b]||0)*12-b;entries.sort((a,b)=>desc?((BUDGET[a[0]]||0)*12-a[1])-((BUDGET[b[0]]||0)*12-b[1]):(((BUDGET[b[0]]||0)*12-b[1])-((BUDGET[a[0]]||0)*12-a[1])));}
+  else if(sc==='pct') entries.sort((a,b)=>{const pa=BUDGET[a[0]]?a[1]/((BUDGET[a[0]]||0)*12):0,pb=BUDGET[b[0]]?b[1]/((BUDGET[b[0]]||0)*12):0;return desc?pb-pa:pa-pb;});
   const si=col=>{const[c2,d2]=cmpAnualSort.split('_');if(c2!==col)return'<span style="color:var(--muted);font-size:8px">↕</span>';return d2==='desc'?'↓':'↑';};
-  let html=`<table class="bud-table" style="width:100%">
-    <thead><tr>
-      <th class="bud-cat th-sort" onclick="setCmpAnualSort('alpha')">Cat ${si('alpha')}</th>
-      <th class="bud-bud th-sort" onclick="setCmpAnualSort('budget')" style="text-align:right">Anual ${si('budget')}</th>
-      <th class="bud-bud th-sort" onclick="setCmpAnualSort('spent')"  style="text-align:right">Gasto ${si('spent')}</th>
-      <th class="bud-bud th-sort" onclick="setCmpAnualSort('saldo')"  style="text-align:right">Saldo ${si('saldo')}</th>
-      <th class="bud-m  th-sort"  onclick="setCmpAnualSort('pct')"    style="text-align:right">% ${si('pct')}</th>
-    </tr></thead><tbody>`;
+  let html='<table class="bud-table" style="width:100%"><thead><tr>'+
+    '<th class="bud-cat th-sort" onclick="setCmpAnualSort(\'alpha\')">Cat '+si('alpha')+'</th>'+
+    '<th class="bud-bud th-sort" onclick="setCmpAnualSort(\'budget\')" style="text-align:right">Anual '+si('budget')+'</th>'+
+    '<th class="bud-bud th-sort" onclick="setCmpAnualSort(\'spent\')"  style="text-align:right">Gasto '+si('spent')+'</th>'+
+    '<th class="bud-bud th-sort" onclick="setCmpAnualSort(\'saldo\')"  style="text-align:right">Saldo '+si('saldo')+'</th>'+
+    '<th class="bud-m  th-sort" onclick="setCmpAnualSort(\'pct\')"    style="text-align:right">% '+si('pct')+'</th>'+
+    '</tr></thead><tbody>';
   entries.forEach(([sub,spent])=>{
-    const budA=(BUDGET[sub]||0)*12,saldo=budA-spent;
-    const pct=budA?Math.min((spent/budA*100),999):null,over=budA&&spent>budA;
-    html+=`<tr onclick="openDetail('${sub}')">
-      <td class="bud-cat">${sub}</td>
-      <td class="bud-bud" style="text-align:right;color:var(--muted)">${budA?fmtK(budA):'—'}</td>
-      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--text)'};font-weight:600">${fmtK(spent)}</td>
-      <td class="bud-bud" style="text-align:right;color:${over?'var(--red)':'var(--green)'}">${budA?(over?'−':'+')+fmtK(Math.abs(saldo)):'—'}</td>
-      <td class="bud-m"   style="text-align:right">${pct!==null?`<span style="font-size:10px;font-weight:600;color:${over?'var(--red)':pct>80?'#C07010':'var(--green)'}">${pct.toFixed(0)}%</span>`:'—'}</td>
-    </tr>`;
+    const budA=(BUDGET[sub]||0)*12,saldo=budA-spent,pct=budA?Math.min((spent/budA*100),999):null,over=budA&&spent>budA;
+    html+='<tr onclick="openDetail(\''+sub+'\')"><td class="bud-cat">'+sub+'</td>'+
+      '<td class="bud-bud" style="text-align:right;color:var(--muted)">'+(budA?fmtK(budA):'—')+'</td>'+
+      '<td class="bud-bud" style="text-align:right;color:'+(over?'var(--red)':'var(--text)')+';font-weight:600">'+fmtK(spent)+'</td>'+
+      '<td class="bud-bud" style="text-align:right;color:'+(over?'var(--red)':'var(--green)')+'">'+( budA?(over?'−':'+')+fmtK(Math.abs(saldo)):'—')+'</td>'+
+      '<td class="bud-m" style="text-align:right">'+(pct!==null?'<span style="font-size:10px;font-weight:600;color:'+(over?'var(--red)':pct>80?'#C07010':'var(--green)')+'">'+pct.toFixed(0)+'%</span>':'—')+'</td></tr>';
   });
-  html+=`</tbody></table>`;
+  html+='</tbody></table>';
   document.getElementById('cmp-rows').innerHTML=html;
 }
 
@@ -1182,137 +526,172 @@ function setCmpAnualSort(col) {
   renderCmpAnual(STATE.txs);
 }
 
-// ── PATRIMÔNIO ────────────────────────────────────────
+// ── PATRIMÔNIO ────────────────────────────────────
 async function renderPatrimonio() {
-  document.getElementById('pat-total-val').textContent='R$ 27,4M';
-  const segs=[
-    {label:'Imóveis',v:17900000,c:'#2C6FAC'},
-    {label:'Investimentos',v:7500000,c:'#1A8C5B'},
-    {label:'Liquidez',v:1979902,c:'#C07010'},
-  ];
+  const segs=[{label:'Imóveis',v:17900000,c:'#2C6FAC'},{label:'Investimentos',v:7500000,c:'#1A8C5B'},{label:'Liquidez',v:1979902,c:'#C07010'}];
   const total=segs.reduce((s,x)=>s+x.v,0);
+  document.getElementById('pat-total-val').textContent='R$ 27,4M';
   document.getElementById('pat-donut').innerHTML=donutSVG(segs,50,50,38,14)+
-    `<div class="donut-legend-v">${segs.map(s=>`
-      <div class="donut-leg-item"><div class="donut-leg-dot" style="background:${s.c}"></div>
-      <div class="donut-leg-name">${s.label}</div><div class="donut-leg-val">${fmtK(s.v)}</div>
-      <div class="donut-leg-pct">${pctOf(s.v,total)}</div></div>`).join('')}</div>`;
-
-  const liq=[
-    {name:'Genial Investimentos',val:7500000},
-    {name:'Unicred CC',val:250000},
-    {name:'Itaú CC',val:229902},
-  ];
-  const imob=[
-    {name:'Apt. Jurerê',val:8000000},
-    {name:'Fazenda',val:5000000},
-    {name:'Casa Praia',val:3200000},
-    {name:'Sala Comercial',val:1700000},
-  ];
-  document.getElementById('pat-items-liq').innerHTML=liq.map(i=>`
-    <div class="pat-item"><div class="pat-item-name">${i.name}</div><div class="pat-item-val">${fmt(i.val)}</div></div>`).join('');
-  document.getElementById('pat-items-imob').innerHTML=imob.map(i=>`
-    <div class="pat-item"><div class="pat-item-name">${i.name}</div><div class="pat-item-val">${fmt(i.val)}</div></div>`).join('');
+    '<div class="donut-legend-v">'+segs.map(s=>
+      '<div class="donut-leg-item"><div class="donut-leg-dot" style="background:'+s.c+'"></div>'+
+      '<div class="donut-leg-name">'+s.label+'</div><div class="donut-leg-val">'+fmtK(s.v)+'</div>'+
+      '<div class="donut-leg-pct">'+pctOf(s.v,total)+'</div></div>').join('')+'</div>';
+  const liq=[{name:'Genial Investimentos',val:7500000},{name:'Unicred CC',val:250000},{name:'Itaú CC',val:229902}];
+  const imob=[{name:'Apt. Jurerê',val:8000000},{name:'Fazenda',val:5000000},{name:'Casa Praia',val:3200000},{name:'Sala Comercial',val:1700000}];
+  document.getElementById('pat-items-liq').innerHTML=liq.map(i=>'<div class="pat-item"><div class="pat-item-name">'+i.name+'</div><div class="pat-item-val">'+fmt(i.val)+'</div></div>').join('');
+  document.getElementById('pat-items-imob').innerHTML=imob.map(i=>'<div class="pat-item"><div class="pat-item-name">'+i.name+'</div><div class="pat-item-val">'+fmt(i.val)+'</div></div>').join('');
 }
 
-// ── REVISAR ───────────────────────────────────────────
+// ── AJUSTES ───────────────────────────────────────
+let activeAjusteTab='revisar';
+
+function renderAjustes() { setAjusteTab(activeAjusteTab); }
+
+function setAjusteTab(tab) {
+  activeAjusteTab=tab;
+  ['revisar','regras','import'].forEach(t=>{
+    const btn=document.getElementById('atab-'+t);
+    const pane=document.getElementById('ajuste-'+t);
+    if(btn) btn.classList.toggle('active',t===tab);
+    if(pane) pane.style.display=t===tab?'block':'none';
+  });
+  if(tab==='revisar') { renderRevisar(); setTimeout(initSwipe,100); }
+  if(tab==='regras')  renderRules();
+  if(tab==='import')  renderImport();
+  updateReviewBadge();
+}
+
+// ── REVISAR ───────────────────────────────────────
 let reviewQueue=[], reviewIdx=0;
 
 function renderRevisar() {
-  const rev=reviewed.load();
-  const minVal=threshold.get();
+  const rev=reviewed.load(), minVal=threshold.get();
   document.getElementById('review-threshold-val').textContent=fmt(minVal);
-  reviewQueue=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal)
-    .sort((a,b)=>parseFloat(b.val)-parseFloat(a.val));
+  reviewQueue=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal).sort((a,b)=>parseFloat(b.val)-parseFloat(a.val));
   reviewIdx=0;
   const skipped=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)<minVal).length;
-  document.getElementById('review-skipped').textContent=
-    skipped>0?`${skipped} lançamento${skipped>1?'s':''} abaixo do limite — edite na aba Despesas se necessário.`:'';
+  document.getElementById('review-skipped').textContent=skipped>0?skipped+' lançamento'+(skipped>1?'s':'')+' abaixo do limite.':'';
   showReviewCard();
 }
 
 function showReviewCard() {
   const wrap=document.getElementById('review-card-wrap');
   const done=document.getElementById('review-done');
-  if(reviewIdx>=reviewQueue.length){
-    wrap.style.display='none'; done.style.display='flex';
-    document.getElementById('review-progress').textContent=''; return;
-  }
-  wrap.style.display='block'; done.style.display='none';
+  if(reviewIdx>=reviewQueue.length){wrap.style.display='none';done.style.display='flex';document.getElementById('review-progress').textContent='';return;}
+  wrap.style.display='block';done.style.display='none';
   const t=reviewQueue[reviewIdx],total=reviewQueue.length;
-  document.getElementById('review-progress').textContent=`${reviewIdx+1} de ${total}`;
-  document.getElementById('review-prog-fill').style.width=`${(reviewIdx/total)*100}%`;
+  document.getElementById('review-progress').textContent=(reviewIdx+1)+' de '+total;
+  document.getElementById('review-prog-fill').style.width=((reviewIdx/total)*100)+'%';
   const card=document.getElementById('review-card');
-  card.innerHTML=`
-    <div class="rv-date">${t.date}</div>
-    <div class="rv-desc">${t.desc}</div>
-    <div class="rv-val">${fmt(parseFloat(t.val)||0)}</div>
-    <div class="rv-sub-row">
-      <span class="rv-cat-badge ${getCat(t.sub)==='Fixa'?'badge-blue':'badge-gold'}">${getCat(t.sub)}</span>
-      <span class="rv-sub">${t.sub}</span>
-    </div>
-    <div class="rv-edit-row">
-      <div class="rv-edit-field">
-        <div class="rv-edit-label">Subcategoria</div>
-        <select id="review-select" onchange="onReviewSubChange()">
-          ${ALL_SUBS.map(s=>`<option value="${s}" ${s===t.sub?'selected':''}>${s}</option>`).join('')}
-        </select>
-      </div>
-      <div class="rv-edit-field">
-        <div class="rv-edit-label">Tipo</div>
-        <select id="review-cat">
-          <option value="Fixa" ${(t.cat||getCat(t.sub))==='Fixa'?'selected':''}>Fixa</option>
-          <option value="Variáveis" ${(t.cat||getCat(t.sub))!=='Fixa'?'selected':''}>Variável</option>
-        </select>
-      </div>
-    </div>`;
+  card.innerHTML=
+    '<div class="rv-date">'+t.date+'</div>'+
+    '<div class="rv-desc">'+t.desc+'</div>'+
+    '<div class="rv-val">'+fmt(parseFloat(t.val)||0)+'</div>'+
+    '<div class="rv-sub-row">'+
+      '<span class="rv-cat-badge '+(getCat(t.sub)==='Fixa'?'badge-blue':'badge-gold')+'">'+getCat(t.sub)+'</span>'+
+      '<span class="rv-sub">'+t.sub+'</span>'+
+    '</div>'+
+    '<div class="rv-edit-row">'+
+      '<div class="rv-edit-field"><div class="rv-edit-label">Subcategoria</div>'+
+        '<select id="review-select" onchange="onReviewSubChange()">'+ALL_SUBS.map(s=>'<option value="'+s+'" '+(s===t.sub?'selected':'')+'>'+s+'</option>').join('')+'</select>'+
+      '</div>'+
+      '<div class="rv-edit-field"><div class="rv-edit-label">Tipo</div>'+
+        '<select id="review-cat"><option value="Fixa" '+((t.cat||getCat(t.sub))==='Fixa'?'selected':'')+'>Fixa</option><option value="Variáveis" '+((t.cat||getCat(t.sub))!=='Fixa'?'selected':'')+'>Variável</option></select>'+
+      '</div>'+
+    '</div>';
   initSwipe(card);
 }
 
 function approveCard() {
   const t=reviewQueue[reviewIdx]; if(!t) return;
-  reviewed.approve(t.id);
-  reviewIdx++;
-  showReviewCard();
+  reviewed.approve(t.id); reviewIdx++; showReviewCard();
 }
 
 function rejectCard() {
   const t=reviewQueue[reviewIdx]; if(!t) return;
   const sel=document.getElementById('review-select');
   const cat=document.getElementById('review-cat');
-  const newSub=sel?sel.value:t.sub;
-  const newCat=cat?cat.value:getCat(newSub);
+  const newSub=sel?sel.value:t.sub, newCat=cat?cat.value:getCat(newSub);
   STATE.txs=STATE.txs.map(x=>x.id===t.id?{...x,sub:newSub,cat:newCat}:x);
   cache.save(STATE.txs);
   if(isConfigured()) sheetsPost({action:'editTx',tx:{...t,sub:newSub,cat:newCat}}).catch(()=>{});
-  reviewed.approve(t.id);
-  reviewIdx++;
-  showReviewCard();
+  reviewed.approve(t.id); reviewIdx++; showReviewCard();
 }
 
 function skipCard() { reviewIdx++; showReviewCard(); }
-
-function onReviewSubChange() {
-  const sel=document.getElementById('review-select');
-  const cat=document.getElementById('review-cat');
-  if(sel&&cat) cat.value=getCat(sel.value);
-}
+function onReviewSubChange() { const sel=document.getElementById('review-select'),cat=document.getElementById('review-cat'); if(sel&&cat) cat.value=getCat(sel.value); }
 
 function initSwipe(el) {
   let sx=0,sy=0;
   el.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;sy=e.touches[0].clientY;},{passive:true});
-  el.addEventListener('touchend',e=>{
-    const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy;
-    if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>50){dx>0?approveCard():rejectCard();}
-  });
+  el.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy;if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>50){dx>0?approveCard():rejectCard();}});
 }
 
-// ── IMPORTAR ──────────────────────────────────────────
+// ── REGRAS ────────────────────────────────────────
+function renderRules() {
+  const rules=userRules.load();
+  const cats=STATE.txs.filter(t=>t.sub==='NÃO CATEGORIZADO').length;
+  let html='<div style="padding:0 16px 12px">'+
+    '<div style="font-size:12px;color:var(--muted2);line-height:1.5;margin-bottom:12px">Palavras-chave para categorização automática ao importar.'+
+    (cats>0?'<span style="color:var(--red);font-weight:600"> '+cats+' lançamentos sem categoria.</span>':'')+
+    '</div>'+
+    '<div style="background:var(--s2);border-radius:10px;padding:12px;margin-bottom:16px;border:1px solid var(--border)">'+
+      '<div style="font-size:11px;font-weight:600;color:var(--muted2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em">Nova Regra</div>'+
+      '<div style="display:flex;gap:8px;margin-bottom:8px">'+
+        '<input id="rule-kw" type="text" placeholder="Palavra-chave (ex: UBER)" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--s1);color:var(--text);font-family:inherit">'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;align-items:center">'+
+        '<select id="rule-sub" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--s1);color:var(--text);font-family:inherit">'+ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO').map(s=>'<option value="'+s+'">'+s+'</option>').join('')+'</select>'+
+        '<button onclick="saveNewRule()" class="btn" style="margin:0;padding:8px 16px;flex-shrink:0">+ Adicionar</button>'+
+      '</div>'+
+      (cats>0?'<button onclick="applyAndRefresh()" class="btn" style="margin-top:8px;width:100%;background:var(--green);border:none">✓ Aplicar aos '+cats+' sem categoria</button>':'')+
+    '</div>';
+  if(rules.length>0) {
+    html+='<div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Suas Regras ('+rules.length+')</div>';
+    html+=rules.map(r=>
+      '<div style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border)">'+
+        '<div style="flex:1;min-width:0">'+
+          '<div style="font-size:12px;font-weight:600;color:var(--text);font-family:monospace">'+r.kw+'</div>'+
+          '<div style="font-size:10px;color:var(--muted);margin-top:2px">→ '+r.sub+'</div>'+
+        '</div>'+
+        '<button onclick="removeRule(\''+r.kw+'\')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px;line-height:1">×</button>'+
+      '</div>'
+    ).join('');
+  }
+  const builtIn=RULES_CARD.length+RULES_ITAU.length+RULES_UNICRED.length;
+  html+='<div style="margin-top:16px;font-size:11px;color:var(--muted);text-align:center">'+builtIn+' regras pré-configuradas</div></div>';
+  document.getElementById('rules-content').innerHTML=html;
+}
+
+function saveNewRule() {
+  const kw=document.getElementById('rule-kw').value.trim().toUpperCase();
+  const sub=document.getElementById('rule-sub').value;
+  if(!kw){showToast('Digite uma palavra-chave','warn');return;}
+  userRules.add(kw,sub); document.getElementById('rule-kw').value='';
+  renderRules(); showToast('Regra "'+kw+'" → '+sub+' salva ✓','ok');
+}
+
+function removeRule(kw) { userRules.remove(kw); renderRules(); showToast('Regra removida','ok'); }
+
+function applyAndRefresh() {
+  const rules=userRules.load(); if(!rules.length) return;
+  let changed=0;
+  STATE.txs=STATE.txs.map(t=>{
+    if(t.sub!=='NÃO CATEGORIZADO') return t;
+    const d=t.desc.toUpperCase();
+    for(const r of rules){if(d.includes(r.kw)){changed++;return{...t,sub:r.sub,cat:r.cat};}}
+    return t;
+  });
+  if(changed>0){cache.save(STATE.txs);}
+  showToast(changed+' lançamentos categorizados ✓','ok'); refreshAll();
+}
+
+// ── IMPORTAR ──────────────────────────────────────
 let pendingTxs=[];
 
 function renderImport() {
-  const dz=document.getElementById('drop-zone');
-  const fi=document.getElementById('file-input');
-  if(dz && !dz._bound) {
+  const dz=document.getElementById('drop-zone'),fi=document.getElementById('file-input');
+  if(dz&&!dz._bound){
     dz._bound=true;
     dz.addEventListener('click',()=>fi.click());
     dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over');});
@@ -1322,8 +701,66 @@ function renderImport() {
   }
 }
 
+function parseCSV(text,type) {
+  const lines=text.split(/\r?\n/).filter(l=>l.trim()), results=[];
+  lines.forEach(line=>{
+    const cols=line.split(';').map(c=>c.replace(/^"|"$/g,'').trim());
+    let date='',desc='',val=0;
+    if(type==='itau'){
+      if(!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
+      const[d,m,y]=cols[0].split('/');date=y+'-'+m+'-'+d;desc=cols[1]||'';
+      val=parseFloat((cols[2]||'0').replace('.','').replace(',','.'))||0; if(val<=0) return;
+    } else if(type==='unicred'){
+      if(!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
+      const[d,m,y]=cols[0].split('/');date=y+'-'+m+'-'+d;desc=cols[2]||cols[1]||'';
+      val=parseFloat((cols[3]||'0').replace('.','').replace(',','.'))||0; if(val<=0) return;
+    } else {
+      if(!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
+      const[d,m,y]=cols[0].split('/');date=y+'-'+m+'-'+d;desc=cols[1]||'';
+      val=parseFloat((cols[2]||'0').replace('.','').replace(',','.'))||0; if(val<=0) return;
+    }
+    const slug=desc.replace(/[^a-zA-Z0-9]/g,'').slice(0,10);
+    const id=type+'_'+date.replace(/-/g,'')+'_'+slug+'_'+val;
+    const{cat,sub,pessoa}=categorize(desc,type);
+    if(cat===null) return;
+    results.push({id,date,desc,val:String(val),cat,sub:sub||'NÃO CATEGORIZADO',pessoa:pessoa||'',obs:'',source:type});
+  });
+  return results;
+}
+
+function expandParcelas(txs) {
+  const extra=[];
+  txs.forEach(t=>{
+    const m=t.desc.match(/(\d{2})\/(\d{2})/); if(!m) return;
+    const cur=parseInt(m[1]),tot=parseInt(m[2]); if(cur<1||tot<2||cur>tot) return;
+    const[y,mo,d]=t.date.split('-').map(Number);
+    for(let i=1;i<=tot-cur;i++){
+      let nm=mo+i,ny=y; while(nm>12){nm-=12;ny++;}
+      const ndate=ny+'-'+String(nm).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+      const nDesc=t.desc.replace(/\d{2}\/\d{2}/,String(cur+i).padStart(2,'0')+'/'+String(tot).padStart(2,'0'));
+      extra.push({...t,id:t.id+'_p'+(cur+i),date:ndate,desc:nDesc,obs:'parcela '+(cur+i)+'/'+tot,source:t.source+'_parcela'});
+    }
+  });
+  return [...txs,...extra];
+}
+
+function detectDuplicates(newTxs,existing){
+  const existIds=new Set(existing.map(t=>t.id));
+  const fresh=[],dupes=[],exact=[];
+  newTxs.forEach(t=>{
+    if(existIds.has(t.id)){exact.push(t);return;}
+    const similar=existing.find(e=>{
+      if(Math.abs(parseFloat(e.val)-parseFloat(t.val))>0.01) return false;
+      if(!e.date||!t.date) return false;
+      return Math.abs(new Date(e.date)-new Date(t.date))<=3*86400000;
+    });
+    if(similar) dupes.push({tx:t,similar}); else fresh.push(t);
+  });
+  return{fresh,dupes,exact};
+}
+
 function handleFiles(files) {
-  pendingTxs=[]; const logEl=document.getElementById('import-log'); logEl.innerHTML='';
+  pendingTxs=[]; document.getElementById('import-log').innerHTML='';
   document.getElementById('import-count').textContent='Lendo arquivos...';
   document.getElementById('btn-confirm').disabled=true;
   let processed=0;
@@ -1345,34 +782,18 @@ function handleFiles(files) {
 function showImportPreview() {
   const existing=cache.load();
   const{fresh,dupes,exact}=detectDuplicates(pendingTxs,existing);
-  const logEl=document.getElementById('import-log');
   let html='';
   if(fresh.length>0){
-    html+=`<div class="import-section-label import-ok">✓ ${fresh.length} novos — serão adicionados</div>`;
-    html+=fresh.map(t=>`<div class="log-item">
-      <div class="log-dot" style="background:${t.sub==='NÃO CATEGORIZADO'?'#C0392B':'#1A8C5B'}"></div>
-      <div style="flex:1"><div class="log-desc">${t.desc.slice(0,40)}</div>
-      <div class="log-sub">${t.date} · ${t.sub}</div></div>
-      <div class="log-val">${fmt(t.val)}</div></div>`).join('');
+    html+='<div class="import-section-label import-ok">✓ '+fresh.length+' novos</div>';
+    html+=fresh.map(t=>'<div class="log-item"><div class="log-dot" style="background:'+(t.sub==='NÃO CATEGORIZADO'?'#C0392B':'#1A8C5B')+'"></div><div style="flex:1"><div class="log-desc">'+t.desc.slice(0,40)+'</div><div class="log-sub">'+t.date+' · '+t.sub+'</div></div><div class="log-val">'+fmt(t.val)+'</div></div>').join('');
   }
   if(dupes.length>0){
-    html+=`<div class="import-section-label import-warn">⚠ ${dupes.length} possíveis duplicatas</div>`;
-    html+=dupes.map(({tx,similar})=>`<div class="log-item" style="border-left:3px solid #E8A020">
-      <div class="log-dot" style="background:#E8A020"></div>
-      <div style="flex:1">
-        <div class="log-desc">${tx.desc.slice(0,38)}</div>
-        <div class="log-sub">${tx.date} · similar: ${similar.date} ${similar.desc.slice(0,20)}</div>
-      </div>
-      <div style="text-align:right">
-        <div class="log-val">${fmt(tx.val)}</div>
-        <label style="font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px">
-          <input type="checkbox" class="dupe-include" data-id="${tx.id}" style="width:12px;height:12px"> incluir
-        </label>
-      </div></div>`).join('');
+    html+='<div class="import-section-label import-warn">⚠ '+dupes.length+' possíveis duplicatas</div>';
+    html+=dupes.map(({tx,similar})=>'<div class="log-item" style="border-left:3px solid #E8A020"><div class="log-dot" style="background:#E8A020"></div><div style="flex:1"><div class="log-desc">'+tx.desc.slice(0,38)+'</div><div class="log-sub">'+tx.date+' · similar: '+similar.date+'</div></div><div style="text-align:right"><div class="log-val">'+fmt(tx.val)+'</div><label style="font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px"><input type="checkbox" class="dupe-include" data-id="'+tx.id+'" style="width:12px;height:12px"> incluir</label></div></div>').join('');
   }
-  if(exact.length>0) html+=`<div class="import-section-label import-muted">✗ ${exact.length} já existentes — ignorados</div>`;
-  logEl.innerHTML=html;
-  document.getElementById('import-count').textContent=`${fresh.length} novos · ${dupes.length} a verificar · ${exact.length} ignorados`;
+  if(exact.length>0) html+='<div class="import-section-label import-muted">✗ '+exact.length+' já existentes — ignorados</div>';
+  document.getElementById('import-log').innerHTML=html;
+  document.getElementById('import-count').textContent=fresh.length+' novos · '+dupes.length+' a verificar · '+exact.length+' ignorados';
   document.getElementById('btn-confirm').disabled=(fresh.length===0&&dupes.length===0);
 }
 
@@ -1380,70 +801,215 @@ async function confirmImport() {
   const btn=document.getElementById('btn-confirm');
   btn.disabled=true; btn.textContent='Salvando...';
   const checkedDupes=[];
-  document.querySelectorAll('.dupe-include:checked').forEach(cb=>{
-    const tx=pendingTxs.find(t=>t.id===cb.dataset.id);
-    if(tx) checkedDupes.push(tx);
-  });
-  const existing=cache.load();
-  const{fresh}=detectDuplicates(pendingTxs,existing);
+  document.querySelectorAll('.dupe-include:checked').forEach(cb=>{const tx=pendingTxs.find(t=>t.id===cb.dataset.id);if(tx)checkedDupes.push(tx);});
+  const{fresh}=detectDuplicates(pendingTxs,cache.load());
   const toAdd=[...fresh,...checkedDupes];
-  const all=cache.load(); const keys=new Set(all.map(t=>t.id));
+  const all=cache.load(),keys=new Set(all.map(t=>t.id));
   const realFresh=toAdd.filter(t=>!keys.has(t.id));
   cache.save([...all,...realFresh]); STATE.txs=cache.load();
-  let added=realFresh.length;
-  if(isConfigured()&&realFresh.length>0){
-    try{await sheetsPost({action:'addTxs',txs:realFresh});}catch(e){STATE.error='Salvo localmente';}
-  }
-  showToast(`✓ ${added} novos lançamentos adicionados!`,'ok');
-  document.getElementById('import-count').textContent=`✓ ${added} adicionados`;
-  btn.textContent='Confirmar Importação'; pendingTxs=[];
-  refreshAll();
+  if(isConfigured()&&realFresh.length>0){try{await sheetsPost({action:'addTxs',txs:realFresh});}catch(e){}}
+  showToast('✓ '+realFresh.length+' lançamentos adicionados!','ok');
+  document.getElementById('import-count').textContent='✓ '+realFresh.length+' adicionados';
+  btn.textContent='Confirmar Importação'; pendingTxs=[]; refreshAll();
 }
 
+// ── DETAIL MODAL ──────────────────────────────────
+function openDetail(subName) {
+  const txs=STATE.txs;
+  const filtered=txs.filter(t=>t.sub===subName).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const total=filtered.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  document.getElementById('detail-title').textContent=subName;
+  document.getElementById('detail-total').textContent=fmt(total)+' · '+filtered.length+' lançamentos';
+  const byM={};filtered.forEach(t=>{const m=t.date?.slice(5,7)||'00';byM[m]=(byM[m]||0)+(parseFloat(t.val)||0);});
+  document.getElementById('detail-chart').innerHTML=monthBarChart(byM,BUDGET[subName]);
+  const rev=reviewed.load();
+  document.getElementById('detail-list').innerHTML=filtered.map(t=>{
+    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'#1A8C5B':st?'#A67C2E':'#ccc';
+    return '<div class="detail-row" style="cursor:pointer">'+
+      '<div style="color:'+dotC+';font-size:14px;width:16px;flex-shrink:0">'+dot+'</div>'+
+      '<div style="flex:1;min-width:0" onclick="openEditTx(\''+t.id+'\')">'+
+        '<div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+t.desc+'</div>'+
+        '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+t.date+(t.obs?' · '+t.obs:'')+'</div>'+
+      '</div>'+
+      '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:8px">'+
+        '<div style="font-size:12px;color:var(--text);font-feature-settings:\'tnum\'">'+fmt(parseFloat(t.val)||0)+'</div>'+
+        '<div onclick="openSplit(\''+t.id+'\')" style="font-size:10px;color:var(--blue);cursor:pointer;padding:2px 5px;border:1px solid var(--border);border-radius:4px">÷</div>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+  document.getElementById('detail-modal').classList.add('open');
+}
+function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
 
-// ── AJUSTES ───────────────────────────────────────────
-let activeAjusteTab = 'revisar';
+// ── EDIT TX MODAL ─────────────────────────────────
+function openEditTx(txId) {
+  const t=STATE.txs.find(x=>x.id===txId); if(!t) return;
+  document.getElementById('edittx-id').value=txId;
+  document.getElementById('edittx-desc').textContent=t.desc||'';
+  document.getElementById('edittx-date').textContent=t.date||'';
+  document.getElementById('edittx-val').textContent=fmt(parseFloat(t.val)||0);
+  const sel=document.getElementById('edittx-sub');
+  if(sel) sel.innerHTML=ALL_SUBS.map(s=>'<option value="'+s+'" '+(s===t.sub?'selected':'')+'>'+s+'</option>').join('');
+  const catSel=document.getElementById('edittx-cat');
+  if(catSel) catSel.value=t.cat||getCat(t.sub);
+  document.getElementById('edittx-modal').classList.add('open');
+}
+function closeEditTx() { document.getElementById('edittx-modal').classList.remove('open'); }
+function onEditSubChange() { const sel=document.getElementById('edittx-sub'),cat=document.getElementById('edittx-cat');if(sel&&cat)cat.value=getCat(sel.value); }
 
-function renderAjustes() {
-  setAjusteTab(activeAjusteTab);
+async function saveEditTx() {
+  const id=document.getElementById('edittx-id').value;
+  const sub=document.getElementById('edittx-sub').value;
+  const cat=document.getElementById('edittx-cat').value||getCat(sub);
+  STATE.txs=STATE.txs.map(t=>t.id===id?{...t,sub,cat}:t);
+  cache.save(STATE.txs);
+  if(isConfigured()) sheetsPost({action:'editTx',tx:STATE.txs.find(t=>t.id===id)}).catch(()=>{});
+  closeEditTx(); refreshAll(); showToast('Salvo ✓','ok');
 }
 
-function setAjusteTab(tab) {
-  activeAjusteTab = tab;
-  ['revisar','regras','import'].forEach(t => {
-    const btn = document.getElementById('atab-'+t);
-    const pane = document.getElementById('ajuste-'+t);
-    if (btn) btn.classList.toggle('active', t===tab);
-    if (pane) pane.style.display = t===tab ? 'block' : 'none';
-  });
-  if (tab==='revisar') { renderRevisar(); setTimeout(initSwipe, 100); }
-  if (tab==='regras')  renderRules();
-  if (tab==='import')  renderImport();
-
-  // Update pending badge
-  const rev = reviewed.load();
-  const minVal = threshold.get();
-  const pending = STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal).length;
-  const badge = document.getElementById('review-badge');
-  if (badge) {
-    badge.style.display = pending>0 ? 'flex' : 'none';
-    badge.textContent = pending>9 ? '9+' : pending;
-  }
+async function deleteTx() {
+  const id=document.getElementById('edittx-id').value;
+  if(!confirm('Excluir este lançamento?')) return;
+  STATE.txs=STATE.txs.filter(t=>t.id!==id);
+  cache.save(STATE.txs);
+  if(isConfigured()) sheetsPost({action:'deleteTx',id}).catch(()=>{});
+  closeEditTx(); refreshAll(); showToast('Excluído','ok');
 }
 
-// ── NAV ───────────────────────────────────────────────
+// ── MANUAL ────────────────────────────────────────
+function openManual() {
+  document.getElementById('manual-date').value=new Date().toISOString().slice(0,10);
+  document.getElementById('manual-val').value='';
+  document.getElementById('manual-desc').value='';
+  document.getElementById('manual-obs').value='';
+  const sel=document.getElementById('manual-sub');
+  if(sel) sel.innerHTML=ALL_SUBS.map(s=>'<option value="'+s+'">'+s+'</option>').join('');
+  document.getElementById('manual-modal').classList.add('open');
+}
+function closeManual() { document.getElementById('manual-modal').classList.remove('open'); }
+
+async function saveManual() {
+  const date=document.getElementById('manual-date').value;
+  const val=document.getElementById('manual-val').value;
+  const desc=document.getElementById('manual-desc').value;
+  const sub=document.getElementById('manual-sub').value;
+  const obs=document.getElementById('manual-obs').value;
+  if(!date||!val||!desc){showToast('Preencha data, valor e descrição','warn');return;}
+  const cat=getCat(sub);
+  const slug=desc.replace(/[^a-zA-Z0-9]/g,'').slice(0,10);
+  const id='manual_'+date.replace(/-/g,'')+'_'+slug+'_'+val;
+  const tx={id,date,desc,val:String(parseFloat(val)||0),cat,sub,pessoa:'',obs,source:'manual'};
+  STATE.txs.push(tx); cache.save(STATE.txs);
+  if(isConfigured()) sheetsPost({action:'addTxs',txs:[tx]}).catch(()=>{});
+  closeManual(); refreshAll(); showToast('Lançamento adicionado ✓','ok');
+}
+
+// ── SPLIT ─────────────────────────────────────────
+let splitTxId=null,splitParts=[];
+
+function openSplit(txId) {
+  const t=STATE.txs.find(x=>x.id===txId); if(!t) return;
+  splitTxId=txId;
+  splitParts=[{desc:t.desc,sub:t.sub,val:''},{desc:'',sub:t.sub,val:''}];
+  document.getElementById('split-original-desc').textContent=t.desc;
+  document.getElementById('split-original-val').textContent=fmt(parseFloat(t.val)||0);
+  document.getElementById('split-original-val').dataset.total=t.val;
+  renderSplitParts();
+  document.getElementById('split-modal').classList.add('open');
+}
+
+function renderSplitParts() {
+  const total=parseFloat(document.getElementById('split-original-val').dataset.total)||0;
+  const used=splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
+  const rem=total-used;
+  document.getElementById('split-remaining').textContent='Restante: '+fmt(rem)+' de '+fmt(total);
+  document.getElementById('split-remaining').style.color=Math.abs(rem)<0.01?'var(--green)':rem<0?'var(--red)':'var(--muted)';
+  document.getElementById('split-parts').innerHTML=splitParts.map((p,i)=>
+    '<div class="split-part">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'+
+        '<div style="font-size:11px;font-weight:600;color:var(--muted2)">Parte '+(i+1)+'</div>'+
+        (splitParts.length>2?'<span onclick="removeSplitPart('+i+')" style="font-size:18px;color:var(--muted);cursor:pointer">×</span>':'')+
+      '</div>'+
+      '<div class="manual-field" style="margin-bottom:6px"><label>Descrição</label><input type="text" value="'+p.desc+'" oninput="splitParts['+i+'].desc=this.value" placeholder="Ex: Mercado"></div>'+
+      '<div style="display:flex;gap:8px">'+
+        '<div class="manual-field" style="flex:1;margin-bottom:0"><label>Categoria</label><select onchange="splitParts['+i+'].sub=this.value">'+ALL_SUBS.map(s=>'<option value="'+s+'" '+(s===p.sub?'selected':'')+'>'+s+'</option>').join('')+'</select></div>'+
+        '<div class="manual-field" style="width:100px;margin-bottom:0"><label>Valor R$</label><input type="number" value="'+p.val+'" step="0.01" placeholder="0,00" oninput="splitParts['+i+'].val=this.value;renderSplitParts()"></div>'+
+      '</div>'+
+    '</div>'
+  ).join('');
+}
+
+function addSplitPart(){const t=STATE.txs.find(x=>x.id===splitTxId);splitParts.push({desc:'',sub:t?.sub||ALL_SUBS[0],val:''});renderSplitParts();}
+function removeSplitPart(i){splitParts.splice(i,1);renderSplitParts();}
+
+function saveSplit() {
+  const t=STATE.txs.find(x=>x.id===splitTxId); if(!t) return closeSplit();
+  const total=parseFloat(t.val)||0;
+  const used=splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
+  if(Math.abs(used-total)>0.02){showToast('Soma ('+fmt(used)+') ≠ total ('+fmt(total)+')','warn');return;}
+  STATE.txs=STATE.txs.filter(x=>x.id!==splitTxId);
+  const newTxs=splitParts.map((p,i)=>({...t,id:splitTxId+'_s'+(i+1),desc:p.desc||t.desc,sub:p.sub,cat:getCat(p.sub),val:String(parseFloat(p.val)||0),obs:'fração '+(i+1)+'/'+splitParts.length}));
+  STATE.txs=[...STATE.txs,...newTxs]; cache.save(STATE.txs);
+  if(isConfigured()){sheetsPost({action:'deleteTx',id:splitTxId}).catch(()=>{});sheetsPost({action:'addTxs',txs:newTxs}).catch(()=>{});}
+  reviewed.approve(splitTxId); newTxs.forEach(tx=>reviewed.approve(tx.id));
+  closeSplit(); refreshAll(); showToast('Dividido em '+splitParts.length+' lançamentos ✓','ok');
+}
+function closeSplit(){document.getElementById('split-modal').classList.remove('open');splitTxId=null;splitParts=[];}
+
+// ── THRESHOLD ─────────────────────────────────────
+function openThresholdModal(){document.getElementById('review-threshold-input').value=threshold.get();document.getElementById('review-threshold-modal').classList.add('open');}
+function closeThresholdModal(){document.getElementById('review-threshold-modal').classList.remove('open');}
+function setReviewThreshold(){const v=parseFloat(document.getElementById('review-threshold-input').value)||1000;threshold.set(v);closeThresholdModal();renderAjustes();}
+
+// ── BUSCA ─────────────────────────────────────────
+let searchFilter='all';
+
+function openSearch(){document.getElementById('search-modal').classList.add('open');setTimeout(()=>document.getElementById('search-input').focus(),100);runSearch();}
+function closeSearch(){document.getElementById('search-modal').classList.remove('open');document.getElementById('search-input').value='';}
+function setSearchFilter(f){searchFilter=f;document.querySelectorAll('#search-filters .sort-pill').forEach(b=>b.classList.remove('active'));event.target.classList.add('active');runSearch();}
+
+function runSearch(){
+  const q=(document.getElementById('search-input').value||'').trim().toLowerCase();
+  let pool=STATE.txs;
+  if(searchFilter==='month') pool=STATE.txs.filter(t=>t.date&&t.date.startsWith('2026-'+activeMonth));
+  if(searchFilter==='uncat') pool=STATE.txs.filter(t=>t.sub==='NÃO CATEGORIZADO');
+  let results=q?pool.filter(t=>(t.desc||'').toLowerCase().includes(q)||(t.sub||'').toLowerCase().includes(q)||(t.obs||'').toLowerCase().includes(q)||String(parseFloat(t.val)||0).includes(q)):pool;
+  results=[...results].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const total=results.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  document.getElementById('search-summary').textContent=(q||searchFilter!=='all')?results.length+' resultado'+(results.length!==1?'s':'')+' · '+fmt(total):pool.length+' lançamentos · '+fmt(pool.reduce((s,t)=>s+(parseFloat(t.val)||0),0));
+  if(!results.length){document.getElementById('search-results').innerHTML='<div style="padding:32px;text-align:center;color:var(--muted);font-size:13px">Nenhum resultado</div>';return;}
+  const rev=reviewed.load();
+  document.getElementById('search-results').innerHTML=results.slice(0,100).map(t=>{
+    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'var(--green)':st?'var(--blue)':'var(--border)';
+    return '<div class="search-row" onclick="closeSearch();openEditTx(\''+t.id+'\')">'+
+      '<div style="color:'+dotC+';font-size:13px;width:14px;flex-shrink:0">'+dot+'</div>'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+t.desc+'</div>'+
+        '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+t.date+' <span style="color:var(--blue)">'+t.sub+'</span>'+(t.obs?' · '+t.obs:'')+'</div>'+
+      '</div>'+
+      '<div style="font-size:13px;font-weight:600;font-feature-settings:\'tnum\';flex-shrink:0;margin-left:8px">'+fmt(parseFloat(t.val)||0)+'</div>'+
+    '</div>';
+  }).join('')+(results.length>100?'<div style="padding:12px;text-align:center;font-size:11px;color:var(--muted)">Mostrando 100 de '+results.length+'</div>':'');
+}
+
+// ── NAV ───────────────────────────────────────────
 const SCREENS=['home','despesas','comparativo','patrimonio','ajustes'];
+
 function showScreen(id) {
   SCREENS.forEach(s=>{
     document.getElementById('screen-'+s).classList.toggle('active',s===id);
     const n=document.getElementById('nav-'+s); if(n) n.classList.toggle('active',s===id);
   });
-  if (id==='ajustes') renderAjustes();
   document.querySelector('.scroll-area').scrollTop=0;
+  if(id==='ajustes') renderAjustes();
   refreshAll();
 }
 
-// ── SEED ──────────────────────────────────────────────
+// ── PIN ───────────────────────────────────────────
+let pinBuffer='';
+function pinKey(digit){if(pinBuffer.length>=4)return;pinBuffer+=digit;updatePinDots();if(pinBuffer.length===4){setTimeout(()=>{pinBuffer='';updatePinDots();},150);}}
+function updatePinDots(){for(let i=0;i<4;i++){const d=document.getElementById('pd'+i);if(d)d.classList.toggle('filled',i<pinBuffer.length);}}
+function pinDel(){pinBuffer=pinBuffer.slice(0,-1);updatePinDots();}
 function seedData() {
   cache.save([
     {id:'xl_20260128_RoyalCaribb_4471.89',date:'2026-01-28',desc:'Royal Caribbean Cr06/10',val:4471.89,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'Cruzeiro Julho 2026',source:'excel'},
@@ -1803,78 +1369,15 @@ function seedData() {
   ]);
 }
 
-// ── PIN ───────────────────────────────────────────────
-const PIN_HASH = '3003'; // PIN: 3003
-const SESSION_KEY = 'pedrozo_unlocked';
-let pinBuffer = '';
-
-function checkPinSession() {
-  // Session valid for 8 hours
-  const t = parseInt(sessionStorage.getItem(SESSION_KEY)||'0');
-  return Date.now() - t < 8 * 60 * 60 * 1000;
-}
-
-function unlockApp() {
-  sessionStorage.setItem(SESSION_KEY, Date.now().toString());
-  const pin = document.getElementById('pin-screen');
-  const app = document.getElementById('app');
-  if (pin) pin.style.display = 'none';
-  if (app) {
-    app.style.display = 'flex';
-    app.style.flexDirection = 'column';
-  }
-  loadData();
-}
-
-function pinKey(digit) {
-  if (pinBuffer.length >= 4) return;
-  pinBuffer += digit;
-  updatePinDots();
-  if (pinBuffer.length === 4) {
-    setTimeout(() => {
-      if (pinBuffer.trim() === PIN_HASH.trim()) {
-        unlockApp();
-      } else {
-        pinBuffer = '';
-        updatePinDots();
-        const err = document.getElementById('pin-error');
-        err.textContent = 'PIN incorreto. Tente novamente.';
-        setTimeout(() => { err.textContent = ''; }, 2000);
-        document.getElementById('pin-dots').classList.add('shake');
-        setTimeout(() => document.getElementById('pin-dots').classList.remove('shake'), 400);
-      }
-    }, 150);
-  }
-}
-
-function pinDel() {
-  pinBuffer = pinBuffer.slice(0, -1);
-  updatePinDots();
-}
-
-function updatePinDots() {
-  for (let i = 0; i < 4; i++) {
-    document.getElementById('pd'+i).classList.toggle('filled', i < pinBuffer.length);
-  }
-}
-
-// ── BOOT ──────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded',()=>{
+// ── BOOT ──────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
-  document.getElementById('detail-modal').addEventListener('click',e=>{
-    if (e.target===document.getElementById('detail-modal')) closeDetail();
+
+  // Modal backdrop close
+  ['detail-modal','edittx-modal','review-threshold-modal','split-modal','search-modal','manual-modal'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
   });
-  document.getElementById('edittx-modal').addEventListener('click',e=>{
-    if (e.target===document.getElementById('edittx-modal')) closeEditTx();
-  });
-  document.getElementById('review-threshold-modal').addEventListener('click',e=>{
-    if (e.target===document.getElementById('review-threshold-modal')) closeThresholdModal();
-  });
-  document.getElementById('split-modal').addEventListener('click',e=>{
-    if (e.target===document.getElementById('split-modal')) closeSplit();
-  });
-  document.getElementById('search-modal').addEventListener('click',e=>{
-    if (e.target===document.getElementById('search-modal')) closeSearch();
-  });
+
   loadData();
 });
