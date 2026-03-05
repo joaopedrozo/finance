@@ -540,6 +540,16 @@ function renderDespesas() {
   document.getElementById('desp-kpi-var').textContent=fmt(vari)+' ('+pctOf(vari,total)+')';
 }
 function setMonth(m) { activeMonth=m; renderDespesas(); }
+function toggleCatRow(id, name) {
+  const el = document.getElementById(id);
+  const idx = id.replace('catrow-','');
+  const arrow = document.getElementById('arrow-'+idx);
+  if (!el) return;
+  const open = el.style.display === 'block';
+  el.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.style.transform = open ? '' : 'rotate(180deg)';
+}
+
 function setDespSort(col) {
   if (col==='valor') {
     despSort = despSort==='valor_desc' ? 'valor_asc' : 'valor_desc';
@@ -579,8 +589,9 @@ function renderComparativo() {
 
 function setCmpView(v) { cmpView=v; renderComparativo(); }
 
+let cmpMensalSort = 'total_desc';
+
 function renderCmpMensal(txs) {
-  // Categoria | Orç/mês | Jan | Fev | Mar | ... | Total
   const months=['01','02','03','04','05','06','07','08','09','10','11','12'];
   const allSubs={};
   txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') {
@@ -588,39 +599,61 @@ function renderCmpMensal(txs) {
     const m=t.date?t.date.slice(5,7):'00';
     allSubs[t.sub][m]=(allSubs[t.sub][m]||0)+(parseFloat(t.val)||0);
   }});
-  const sorted=Object.entries(allSubs).sort((a,b)=>{
-    const ta=Object.values(a[1]).reduce((x,y)=>x+y,0);
-    const tb=Object.values(b[1]).reduce((x,y)=>x+y,0);
-    return tb-ta;
-  });
 
-  const activeMths=months.filter(m=>sorted.some(([,mv])=>mv[m]));
+  const activeMths=months.filter(m=>Object.values(allSubs).some(mv=>mv[m]));
+
+  // Sort
+  let entries=Object.entries(allSubs);
+  if (cmpMensalSort==='total_desc') entries.sort((a,b)=>{
+    return Object.values(b[1]).reduce((x,y)=>x+y,0)-Object.values(a[1]).reduce((x,y)=>x+y,0);
+  });
+  else if (cmpMensalSort==='total_asc') entries.sort((a,b)=>{
+    return Object.values(a[1]).reduce((x,y)=>x+y,0)-Object.values(b[1]).reduce((x,y)=>x+y,0);
+  });
+  else if (cmpMensalSort==='alpha') entries.sort((a,b)=>a[0].localeCompare(b[0]));
+  else if (cmpMensalSort==='budget') entries.sort((a,b)=>(BUDGET[b[0]]||0)-(BUDGET[a[0]]||0));
+
+  const si=(col)=>cmpMensalSort===col+'_desc'?'↓':cmpMensalSort===col+'_asc'?'↑':cmpMensalSort===col?'↓':'↕';
+
+  // Fixed column widths for alignment
+  const CAT_W=110, BUD_W=52, M_W=52, TOT_W=58;
 
   let html=`<div class="cmp-scroll-wrap"><table class="bud-table">
+    <colgroup>
+      <col style="width:${CAT_W}px;min-width:${CAT_W}px">
+      <col style="width:${BUD_W}px;min-width:${BUD_W}px">
+      ${activeMths.map(()=>`<col style="width:${M_W}px;min-width:${M_W}px">`).join('')}
+      <col style="width:${TOT_W}px;min-width:${TOT_W}px">
+    </colgroup>
     <thead><tr>
-      <th class="bud-cat">Categoria</th>
-      <th class="bud-bud">Orç/mês</th>
-      ${activeMths.map(m=>`<th class="bud-m">${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][parseInt(m)-1]}</th>`).join('')}
-      <th class="bud-tot">Total</th>
+      <th class="bud-cat" onclick="setCmpMensalSort('alpha')" style="cursor:pointer">Cat ${si('alpha')}</th>
+      <th class="bud-bud" onclick="setCmpMensalSort('budget')" style="cursor:pointer;text-align:right">Orç ${si('budget')}</th>
+      ${activeMths.map(m=>`<th class="bud-m" style="text-align:right">${['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][parseInt(m)-1]}</th>`).join('')}
+      <th class="bud-tot" onclick="setCmpMensalSort('total')" style="cursor:pointer;text-align:right">Total ${si('total')}</th>
     </tr></thead><tbody>`;
 
-  sorted.forEach(([sub,byMonth])=>{
+  entries.forEach(([sub,byMonth])=>{
     const bud=BUDGET[sub]||0;
     const total=Object.values(byMonth).reduce((a,b)=>a+b,0);
     html+=`<tr onclick="openDetail('${sub}')">
-      <td class="bud-cat">${sub}</td>
-      <td class="bud-bud">${bud?fmtK(bud):'—'}</td>
+      <td class="bud-cat" style="width:${CAT_W}px">${sub}</td>
+      <td class="bud-bud" style="text-align:right;color:var(--muted)">${bud?fmtK(bud):'—'}</td>
       ${activeMths.map(m=>{
         const v=byMonth[m]||0;
         const over=bud&&v>bud;
-        return `<td class="bud-m ${over?'cell-over':v>0?'cell-ok':'cell-empty'}">${v>0?fmtK(v):'—'}</td>`;
+        return `<td class="bud-m ${over?'cell-over':v>0?'cell-ok':'cell-empty'}" style="text-align:right">${v>0?fmtK(v):'—'}</td>`;
       }).join('')}
-      <td class="bud-tot">${fmtK(total)}</td>
+      <td class="bud-tot" style="text-align:right;font-weight:700">${fmtK(total)}</td>
     </tr>`;
   });
 
   html+=`</tbody></table></div>`;
   document.getElementById('cmp-rows').innerHTML=html;
+}
+
+function setCmpMensalSort(col) {
+  cmpMensalSort = cmpMensalSort===col+'_desc' ? col+'_asc' : col+'_desc';
+  renderCmpMensal(STATE.txs);
 }
 
 function renderCmpAnual(txs) {
@@ -631,13 +664,14 @@ function renderCmpAnual(txs) {
   });
   const sorted=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]);
 
+  // sorted already by spent desc — add clickable total header
   let html=`<table class="bud-table" style="width:100%">
     <thead><tr>
-      <th class="bud-cat">Categoria</th>
+      <th class="bud-cat" style="cursor:pointer" onclick="renderCmpAnual(STATE.txs)">Categoria ↕</th>
       <th class="bud-bud" style="text-align:right">Anual</th>
-      <th class="bud-bud" style="text-align:right">Gasto</th>
+      <th class="bud-bud" style="text-align:right">Gasto ↓</th>
       <th class="bud-bud" style="text-align:right">Saldo</th>
-      <th class="bud-m" style="text-align:right">%</th>
+      <th class="bud-m"  style="text-align:right">%</th>
     </tr></thead><tbody>`;
 
   sorted.forEach(([sub,spent])=>{

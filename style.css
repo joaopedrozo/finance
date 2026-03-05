@@ -770,3 +770,36 @@ select {
   transform: scale(.92);
   box-shadow: 0 2px 8px rgba(28,47,90,.25);
 }
+
+/* ── REVIEW INLINE EDIT ── */
+.rv-edit-row {
+  display:flex; gap:8px; margin-top:12px;
+  padding-top:12px; border-top:1px solid rgba(255,255,255,.15);
+}
+.rv-edit-field { flex:1; }
+.rv-edit-label {
+  font-size:9px; color:rgba(255,255,255,.5);
+  text-transform:uppercase; letter-spacing:.1em; margin-bottom:4px;
+}
+.rv-edit-field select {
+  width:100%; background:rgba(255,255,255,.15);
+  border:1px solid rgba(255,255,255,.2); border-radius:6px;
+  color:#fff; font-size:11px; padding:6px 8px;
+  font-family:inherit;
+}
+
+/* ── COLLAPSIBLE CAT ROWS ── */
+.cat-row-wrap { border-bottom:1px solid var(--border); }
+.cat-row-wrap:last-child { border-bottom:none; }
+.cat-row-wrap .cat-row { border-bottom:none; }
+.cat-row-detail {
+  background:var(--s2);
+  border-top:1px solid var(--border);
+}
+.cat-sub-row {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 16px; border-bottom:1px solid var(--border);
+  cursor:pointer;
+}
+.cat-sub-row:last-of-type { border-bottom:none; }
+.cat-sub-row:active { background:var(--s3); }
