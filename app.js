@@ -114,7 +114,28 @@ const threshold = {
 };
 const reviewed = {
   load() { try { return JSON.parse(localStorage.getItem('jcrp_reviewed')||'{}'); } catch { return {}; } },
-  approve(id) { const r=this.load(); r[id]='ok'; localStorage.setItem('jcrp_reviewed',JSON.stringify(r)); }
+  save(obj) { localStorage.setItem('jcrp_reviewed', JSON.stringify(obj)); },
+  approve(id) {
+    const r=this.load(); r[id]='ok';
+    this.save(r);
+    // Push to Sheets in background for backup
+    if(isConfigured()) sheetsPost({action:'saveReviewed', reviewed:r}).catch(()=>{});
+  },
+  // Restore from Sheets — called on load if localStorage is empty
+  async restore() {
+    if(!isConfigured()) return;
+    try {
+      const timeout = new Promise((_,r)=>setTimeout(()=>r(new Error('t')),5000));
+      const remote = await Promise.race([sheetsGet('getReviewed'), timeout]);
+      if(remote && typeof remote === 'object' && Object.keys(remote).length > 0) {
+        const local = this.load();
+        const merged = {...remote, ...local}; // local wins on conflict
+        this.save(merged);
+        return merged;
+      }
+    } catch(e) {}
+    return this.load();
+  }
 };
 
 // ── STATE ─────────────────────────────────────────
@@ -158,6 +179,13 @@ async function loadData(silent=false) {
     localCache.forEach(t => { if(localRev[t.id]) localEdits[t.id] = {sub:t.sub, cat:t.cat, obs:t.obs}; });
     const merged = remote.map(t => localEdits[t.id] ? {...t, ...localEdits[t.id]} : t);
     STATE.txs = merged; STATE.synced = true; cache.save(merged);
+    // Restore reviewed state from Sheets if localStorage was cleared
+    if(Object.keys(localRev).length === 0) {
+      reviewed.restore().then(()=>{ updateReviewBadge(); });
+    } else {
+      // Push local reviewed state to Sheets to keep it backed up
+      sheetsPost({action:'saveReviewed', reviewed:localRev}).catch(()=>{});
+    }
     refreshAll();
   } catch(e) {
     STATE.error = 'Offline';
@@ -255,81 +283,74 @@ function renderHome() {
   const budMensal=Object.values(BUDGET).reduce((a,b)=>a+b,0);
   const budAcum=budMensal*nMonths;
   const pctUsado=budAcum?Math.min((acum/budAcum)*100,999):0;
-  const saldo=budAcum-acum, over=acum>budAcum;
+  const saldo=budAcum-acum;
 
+  // Per-month totals
+  const monthCards=months.map(ym=>{ const m=parseInt(ym.slice(5)); return {m,ym,ag:aggregate(txs,m)}; });
+
+  // Top 5 categories (all time)
   const allSubs={};
   txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
   const top5=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]).slice(0,5);
   const maxV=top5[0]?.[1]||1;
 
-  const monthCards=months.map(ym=>{
-    const m=parseInt(ym.slice(5));
-    const ag=aggregate(txs,m);
-    return {m,ym,ag,ov:ag.total>budMensal};
-  });
-
-  const byM=byMonthTotals(txs);
-  const allMonths=['01','02','03','04','05','06','07','08','09','10','11','12'];
-  const barMax=Math.max(...allMonths.map(m=>byM[m]||0),budMensal,1);
-
+  // Fixa vs variavel
+  const fixaTotal=txs.filter(t=>getCat(t.sub)==='Fixa').reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  const varTotal=acum-fixaTotal;
 
   document.getElementById('home-dashboard').innerHTML=
     '<div class="dash-wrap">'+
 
-    // 1. ACUMULADO
-    '<div class="dash-hero">'+
-      '<div class="dash-hero-left">'+
-        '<div class="dash-label">Acumulado 2026</div>'+
-        '<div class="dash-total">'+fmt(acum)+'</div>'+
-        '<div class="dash-sub">'+nMonths+' '+(nMonths===1?'mês':'meses')+' · '+pctUsado.toFixed(0)+'% do orçado</div>'+
-      '</div>'+
-      '<div class="dash-hero-right">'+
-        '<div class="dash-saldo-label">Saldo</div>'+
-        '<div class="dash-saldo">'+fmtK(Math.abs(saldo))+'</div>'+
-      '</div>'+
-    '</div>'+
-    '<div class="dash-prog-track"><div class="dash-prog-fill '+(over?'dash-prog-over':'')+'" style="width:'+Math.min(pctUsado,100).toFixed(1)+'%"></div></div>'+
-
-    // 2. MESES
-    '<div class="dash-months">'+
-    monthCards.map(({m,ag,ov},i)=>
-      (i>0?'<div class="dash-month-div"></div>':'')+
-      '<div class="dash-month-card" onclick="showScreen(\'despesas\');setMonth(\''+String(m).padStart(2,'0')+'\')">'+
-        '<div class="dash-month-name">'+MNAMES[m-1].slice(0,3)+'</div>'+
-        '<div class="dash-month-val">'+fmtK(ag.total)+'</div>'+
-        '<div class="dash-month-sub">'+fmtK(ag.total)+'</div>'+
-      '</div>'
-    ).join('')+
-    '</div>'+
-
-    // 3. TOP 5
-    '<div class="dash-section-label">Top 5 Categorias</div>'+
-    '<div class="dash-top5">'+
-    top5.map(([name,val],i)=>{
-      const ov=BUDGET[name]&&val>BUDGET[name]*nMonths;
-      return '<div class="dash-cat-row" onclick="showScreen(\'despesas\')">'+
-        '<div class="dash-cat-dot" style="background:'+COLORS[i]+'"></div>'+
-        '<div class="dash-cat-name">'+name+'</div>'+
-        '<div class="dash-cat-bar-wrap"><div class="dash-cat-bar" style="width:'+(val/maxV*100).toFixed(1)+'%;background:'+COLORS[i]+'"></div></div>'+
-        '<div class="dash-cat-val">'+fmtK(val)+'</div>'+
-      '</div>';
-    }).join('')+
-    '</div>'+
-
-    // 4. EVOLUÇÃO
-    '<div class="dash-section-label">Evolução</div>'+
-    '<div class="dash-bars">'+
-    allMonths.map((mo,i)=>{
-      const v=byM[mo]||0,h=v>0?Math.max((v/barMax*100),4):0;
-      const ov=v>budMensal,active=v>0;
-      return '<div class="dash-bar-col" '+(active?'onclick="showScreen(\'despesas\');setMonth(\''+mo+'\')" style="cursor:pointer"':'')+'>'+
-        '<div class="dash-bar-wrap">'+
-        '<div class="dash-budget-line" style="bottom:'+(budMensal/barMax*100).toFixed(1)+'%"></div>'+
-        '<div class="dash-bar-fill '+(active?'dash-bar-active':'dash-bar-empty')+'" style="height:'+h.toFixed(1)+'%"></div>'+
+    // ── CARD 1: Resumo acumulado ──
+    '<div class="hcard">'+
+      '<div class="hcard-label">Acumulado 2026</div>'+
+      '<div class="hcard-total">'+fmt(acum)+'</div>'+
+      '<div class="hcard-sub">'+nMonths+' '+(nMonths===1?'mês':'meses')+' · '+pctUsado.toFixed(0)+'% do orçado</div>'+
+      '<div class="hcard-prog-track"><div class="hcard-prog-fill" style="width:'+Math.min(pctUsado,100).toFixed(1)+'%"></div></div>'+
+      '<div class="hcard-kpis">'+
+        '<div class="hcard-kpi">'+
+          '<div class="hcard-kpi-label">Saldo</div>'+
+          '<div class="hcard-kpi-val '+(saldo<0?'hkv-neg':'hkv-pos')+'">'+
+            (saldo<0?'−':'+')+''+fmtK(Math.abs(saldo))+
+          '</div>'+
         '</div>'+
-        '<div class="dash-bar-lbl">'+MNAMES[i].slice(0,1)+'</div>'+
-      '</div>';
-    }).join('')+
+        '<div class="hcard-kpi-sep"></div>'+
+        '<div class="hcard-kpi">'+
+          '<div class="hcard-kpi-label">Fixas</div>'+
+          '<div class="hcard-kpi-val">'+fmtK(fixaTotal)+'</div>'+
+        '</div>'+
+        '<div class="hcard-kpi-sep"></div>'+
+        '<div class="hcard-kpi">'+
+          '<div class="hcard-kpi-label">Variáveis</div>'+
+          '<div class="hcard-kpi-val">'+fmtK(varTotal)+'</div>'+
+        '</div>'+
+      '</div>'+
+    '</div>'+
+
+    // ── CARD 2: Por mês ──
+    '<div class="hcard">'+
+      '<div class="hcard-label">Por Mês</div>'+
+      '<div class="hmonth-grid">'+
+      monthCards.map(({m,ag})=>
+        '<div class="hmonth-item" onclick="showScreen(\'despesas\');setMonth(\''+String(m).padStart(2,'0')+'\')">'+
+          '<div class="hmonth-name">'+MNAMES[m-1].slice(0,3)+'</div>'+
+          '<div class="hmonth-val">'+fmtK(ag.total)+'</div>'+
+        '</div>'
+      ).join('')+
+      '</div>'+
+    '</div>'+
+
+    // ── CARD 3: Top 5 categorias ──
+    '<div class="hcard">'+
+      '<div class="hcard-label">Top Categorias</div>'+
+      top5.map(([name,val],i)=>
+        '<div class="htop5-row" onclick="showScreen(\'despesas\')">'+
+          '<div class="htop5-idx">'+(i+1)+'</div>'+
+          '<div class="htop5-name">'+name+'</div>'+
+          '<div class="htop5-bar-wrap"><div class="htop5-bar" style="width:'+(val/maxV*100).toFixed(1)+'%;background:'+COLORS[i]+'"></div></div>'+
+          '<div class="htop5-val">'+fmtK(val)+'</div>'+
+        '</div>'
+      ).join('')+
     '</div>'+
 
     '</div>';
@@ -676,35 +697,46 @@ function initSwipe(el) {
 function renderRules() {
   const rules=userRules.load();
   const cats=STATE.txs.filter(t=>t.sub==='NÃO CATEGORIZADO').length;
-  let html='<div style="padding:0 16px 12px">'+
-    '<div style="font-size:12px;color:var(--muted2);line-height:1.5;margin-bottom:12px">Palavras-chave para categorização automática ao importar.'+
-    (cats>0?'<span style="color:var(--red);font-weight:600"> '+cats+' lançamentos sem categoria.</span>':'')+
-    '</div>'+
-    '<div style="background:var(--s2);border-radius:10px;padding:12px;margin-bottom:16px;border:1px solid var(--border)">'+
-      '<div style="font-size:11px;font-weight:600;color:var(--muted2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em">Nova Regra</div>'+
-      '<div style="display:flex;gap:8px;margin-bottom:8px">'+
-        '<input id="rule-kw" type="text" placeholder="Palavra-chave (ex: UBER)" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--s1);color:var(--text);font-family:inherit">'+
-      '</div>'+
-      '<div style="display:flex;gap:8px;align-items:center">'+
-        '<select id="rule-sub" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--s1);color:var(--text);font-family:inherit">'+ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO').map(s=>'<option value="'+s+'">'+s+'</option>').join('')+'</select>'+
-        '<button onclick="saveNewRule()" class="btn" style="margin:0;padding:8px 16px;flex-shrink:0">+ Adicionar</button>'+
-      '</div>'+
-      (cats>0?'<button onclick="applyAndRefresh()" class="btn" style="margin-top:8px;width:100%;background:var(--green);border:none">✓ Aplicar aos '+cats+' sem categoria</button>':'')+
-    '</div>';
-  if(rules.length>0) {
-    html+='<div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">Suas Regras ('+rules.length+')</div>';
-    html+=rules.map(r=>
-      '<div style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border)">'+
-        '<div style="flex:1;min-width:0">'+
-          '<div style="font-size:12px;font-weight:600;color:var(--text);font-family:monospace">'+r.kw+'</div>'+
-          '<div style="font-size:10px;color:var(--muted);margin-top:2px">→ '+r.sub+'</div>'+
-        '</div>'+
-        '<button onclick="removeRule(\''+r.kw+'\')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px;line-height:1">×</button>'+
-      '</div>'
-    ).join('');
-  }
   const builtIn=RULES_CARD.length+RULES_ITAU.length+RULES_UNICRED.length;
-  html+='<div style="margin-top:16px;font-size:11px;color:var(--muted);text-align:center">'+builtIn+' regras pré-configuradas</div></div>';
+
+  let html=
+    // Header info
+    '<div class="rules-wrap">'+
+    (cats>0
+      ? '<div class="rules-banner"><span>'+cats+' lançamento'+(cats>1?'s':'')+' sem categoria</span>'+
+        '<button onclick="applyAndRefresh()" class="rules-apply-btn">Aplicar regras</button></div>'
+      : '')+
+
+    // Nova regra
+    '<div class="rules-new-card">'+
+      '<div class="rules-new-title">Nova regra</div>'+
+      '<input id="rule-kw" type="text" placeholder="Palavra-chave  —  ex: UBER, NETFLIX" class="rules-input">'+
+      '<div class="rules-new-row">'+
+        '<select id="rule-sub" class="rules-select">'+
+          ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO').map(s=>'<option value="'+s+'">'+s+'</option>').join('')+
+        '</select>'+
+        '<button onclick="saveNewRule()" class="rules-add-btn">Adicionar</button>'+
+      '</div>'+
+    '</div>'+
+
+    // Regras do usuário
+    (rules.length>0
+      ? '<div class="rules-list-header">Suas regras <span class="rules-count">'+rules.length+'</span></div>'+
+        '<div class="rules-list">'+
+        rules.map(r=>
+          '<div class="rules-row">'+
+            '<div class="rules-row-kw">'+r.kw+'</div>'+
+            '<div class="rules-row-arrow">→</div>'+
+            '<div class="rules-row-sub">'+r.sub+'</div>'+
+            '<button onclick="removeRule(\''+r.kw+'\')" class="rules-row-del">×</button>'+
+          '</div>'
+        ).join('')+
+        '</div>'
+      : '<div class="rules-empty">Nenhuma regra criada ainda</div>')+
+
+    '<div class="rules-footer">'+builtIn+' regras pré-configuradas no sistema</div>'+
+    '</div>';
+
   document.getElementById('rules-content').innerHTML=html;
 }
 
