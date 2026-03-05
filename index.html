@@ -136,18 +136,33 @@
 
     <!-- INÍCIO -->
     <div id="screen-home" class="screen active">
+
+      <!-- Hero: acumulado + barra orçado -->
       <div class="home-hero" id="home-hero"></div>
-      <div class="section-label" style="margin-top:4px">Composição Acumulada</div>
+
+      <!-- Top 5 categorias -->
+      <div class="section-label">Top 5 Categorias — Acumulado</div>
       <div class="card" style="margin-bottom:12px">
-        <div class="card-body"><div id="home-pizza"></div></div>
+        <div class="card-body" id="home-top5"></div>
       </div>
-      <div class="section-label">Evolução — Total vs Orçado</div>
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-body" style="padding-top:16px" id="home-evolucao"></div>
+
+      <!-- Pizza top 5 + evolução lado a lado compacto -->
+      <div class="section-label">Composição · Evolução</div>
+      <div style="display:flex;gap:12px;padding:0 16px 12px">
+        <div class="card" style="flex:1;margin:0">
+          <div class="card-body" style="padding:12px" id="home-pizza"></div>
+        </div>
+        <div class="card" style="flex:1;margin:0">
+          <div class="card-body" style="padding:12px;padding-top:12px" id="home-evolucao"></div>
+        </div>
       </div>
-      <div class="section-label">Selecione o Mês</div>
+
+      <!-- Mês -->
+      <div class="section-label">Por Mês</div>
       <div class="month-pills" id="home-month-pills"></div>
       <div id="home-month-summary"></div>
+
+      <!-- Alertas -->
       <div id="home-alerts"></div>
       <div style="height:8px"></div>
     </div>

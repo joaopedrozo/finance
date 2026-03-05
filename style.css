@@ -31,7 +31,15 @@ body {
 }
 
 /* ── LAYOUT SHELL ── */
-#app { display:flex; flex-direction:column; height:100%; height:100dvh; }
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  overflow: hidden;
+}
 
 /* ── STATUS BAR AREA ── */
 .statusbar {
@@ -66,9 +74,12 @@ body {
 
 /* ── SCROLL AREA ── */
 .scroll-area {
-  flex:1; overflow-y:auto; overflow-x:hidden;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   padding-bottom: calc(80px + var(--safe-bot));
+  min-height: 0; /* critical for flex child scroll */
 }
 
 /* ── BOTTOM NAV ── */
@@ -688,3 +699,40 @@ select {
 .import-ok   { color:var(--green); }
 .import-warn { color:#C07010; }
 .import-muted{ color:var(--muted); }
+
+/* ── HERO BUDGET ROW ── */
+.hero-budget-row {
+  margin-top:12px;
+}
+.hero-budget-track {
+  height:6px; background:rgba(255,255,255,.2);
+  border-radius:3px; overflow:hidden; margin-bottom:6px;
+}
+.hero-budget-fill {
+  height:100%; background:rgba(255,255,255,.8);
+  border-radius:3px; transition:width .5s;
+}
+.hero-budget-fill.over { background:#FFB3AD; }
+.hero-budget-nums {
+  display:flex; justify-content:space-between;
+  font-size:11px;
+}
+.hero-ok   { color:#7DDFB0; font-weight:600; }
+.hero-over { color:#FFB3AD; font-weight:600; }
+.hero-saldo { color:rgba(255,255,255,.5); }
+.hero-mini-over { color:#FFB3AD !important; }
+
+/* ── HOME TOP 5 ── */
+.htop-row {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 0; border-bottom:1px solid var(--border);
+  cursor:pointer;
+}
+.htop-row:last-child { border-bottom:none; }
+.htop-dot  { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.htop-name { font-size:12px; color:var(--text); width:90px; flex-shrink:0;
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.htop-bar-wrap { flex:1; height:6px; background:var(--s3); border-radius:3px; overflow:hidden; }
+.htop-bar  { height:100%; border-radius:3px; transition:width .4s; }
+.htop-val  { font-size:12px; font-feature-settings:'tnum'; flex-shrink:0; width:58px; text-align:right; }
+.htop-pct  { font-size:10px; color:var(--muted); width:28px; text-align:right; flex-shrink:0; }

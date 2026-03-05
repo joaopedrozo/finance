@@ -267,56 +267,80 @@ function refreshAll() {
 
 // ── HOME ──────────────────────────────────────────────
 function renderHome() {
-  const txs=STATE.txs, jan=aggregate(txs,1), fev=aggregate(txs,2), acum=jan.total+fev.total;
-  const rev=reviewed.load(), pending=txs.filter(t=>!rev[t.id]).length;
-  const months=txs.reduce((s,t)=>{ if(t.date)s.add(t.date.slice(0,7)); return s; },new Set()).size;
+  const txs=STATE.txs;
+  const months=[...new Set(txs.map(t=>t.date?.slice(0,7)).filter(Boolean))].sort();
+  const nMonths=months.length;
+  const acum=txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  const budMensal=Object.values(BUDGET).reduce((a,b)=>a+b,0);
+  const budAcum=budMensal*nMonths;
+  const pctBudget=budAcum?((acum/budAcum)*100).toFixed(0):'—';
+  const saldo=budAcum-acum;
+  const overBudget=acum>budAcum;
+  const rev=reviewed.load(), pending=txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=threshold.get()).length;
 
-  // Hero block — big numbers + % orçado
-  const budgetMensal = Object.values(BUDGET).reduce((a,b)=>a+b,0);
-  const budgetAcum   = budgetMensal * months;
-  const pctBudget    = budgetAcum ? ((acum/budgetAcum)*100).toFixed(0) : '—';
-  const overBudget   = acum > budgetAcum;
+  // ── HERO ──
   document.getElementById('home-hero').innerHTML=`
     <div class="hero-main">
-      <div class="hero-label">Acumulado 2026</div>
-      <div class="hero-value" onclick="openDetail('TOTAL')">${fmt(acum)}</div>
-      <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
-        <div class="hero-sub">${months} ${months===1?'mês':'meses'} registrados</div>
-        <div class="hero-budget-badge ${overBudget?'over':'ok'}" onclick="showScreen('comparativo')">
-          ${pctBudget}% do orçado
+      <div class="hero-label">Acumulado 2026 · ${nMonths} ${nMonths===1?'mês':'meses'}</div>
+      <div class="hero-value">${fmt(acum)}</div>
+      <div class="hero-budget-row">
+        <div class="hero-budget-track">
+          <div class="hero-budget-fill ${overBudget?'over':''}" style="width:${Math.min(parseFloat(pctBudget),100)}%"></div>
+        </div>
+        <div class="hero-budget-nums">
+          <span class="${overBudget?'hero-over':'hero-ok'}">${pctBudget}% utilizado</span>
+          <span class="hero-saldo">${overBudget?'estouro':'saldo'} ${fmtK(Math.abs(saldo))}</span>
         </div>
       </div>
     </div>
     <div class="hero-row">
-      ${[...Array(months)].map((_,i)=>{
-        const mo=String(i+1).padStart(2,'0');
-        const ag=aggregate(STATE.txs,i+1);
-        return `<div class="hero-mini" onclick="selectHomeMonth('${mo}')">
-          <div class="hero-mini-label">${MNAMES[i]}</div>
-          <div class="hero-mini-val">${fmt(ag.total)}</div>
-        </div>${i<months-1?'<div class="hero-divider"></div>':''}`;
+      ${months.map((ym,i)=>{
+        const m=parseInt(ym.slice(5));
+        const ag=aggregate(txs,m);
+        const bud=budMensal, over=ag.total>bud;
+        return `<div class="hero-mini" onclick="selectHomeMonth('${String(m).padStart(2,'0')}')">
+          <div class="hero-mini-label">${MNAMES[m-1]}</div>
+          <div class="hero-mini-val ${over?'hero-mini-over':''}">${fmt(ag.total)}</div>
+        </div>${i<months.length-1?'<div class="hero-divider"></div>':''}`;
       }).join('')}
     </div>`;
 
-  // Pizza acumulado Jan+Fev
+  // ── TOP 5 CATEGORIAS ──
+  const allSubs={};
+  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
+  const top5=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const maxV=top5[0]?.[1]||1;
+  document.getElementById('home-top5').innerHTML=top5.map(([name,val],i)=>{
+    const bud=BUDGET[name], over=bud&&val>bud*nMonths;
+    const pct=(val/acum*100).toFixed(0);
+    return `<div class="htop-row" onclick="openDetail('${name}')">
+      <div class="htop-dot" style="background:${COLORS[i]}"></div>
+      <div class="htop-name">${name}</div>
+      <div class="htop-bar-wrap">
+        <div class="htop-bar" style="width:${(val/maxV*100).toFixed(1)}%;background:${over?'var(--red)':COLORS[i]}"></div>
+      </div>
+      <div class="htop-val ${over?'prog-over':''}">${fmtK(val)}</div>
+      <div class="htop-pct">${pct}%</div>
+    </div>`;
+  }).join('');
+
+  // ── PIZZA top 5 only ──
   renderHomePizza(txs);
 
-  // Evolução total vs orçado
-  const byM = byMonthTotals(txs);
-  const bMensal = Object.values(BUDGET).reduce((a,b)=>a+b,0);
-  document.getElementById('home-evolucao').innerHTML = monthBarChart(byM, bMensal);
+  // ── EVOLUÇÃO ──
+  const byM=byMonthTotals(txs);
+  document.getElementById('home-evolucao').innerHTML=monthBarChart(byM,budMensal);
 
-  // Month pills + summary
+  // ── MÊS PILLS ──
   renderHomeMonthPills();
   renderMonthSummary();
 
-  // Compact alerts
+  // ── ALERTAS ──
   const alerts=[];
-  if (pending>0) alerts.push({type:'warn',title:`${pending} para revisar`,body:'Toque em Revisar na barra inferior'});
-  const ncat=(jan.bySub['NÃO CATEGORIZADO']||0)+(fev.bySub['NÃO CATEGORIZADO']||0);
-  if (ncat>500) alerts.push({type:'warn',title:'Itens sem categoria',body:`${fmt(ncat)} aguardam classificação`});
-  if ((fev.bySub['COMPRAS P']||0)>10000) alerts.push({type:'danger',title:'Compras P elevadas em Fev',body:`${fmt(fev.bySub['COMPRAS P']||0)}`});
-  if (alerts.length===0) alerts.push({type:'ok',title:'Tudo em ordem',body:'Nenhum alerta no momento'});
+  if (pending>0) alerts.push({type:'warn',title:`${pending} lançamento${pending>1?'s':''} para revisar`,body:'Toque em Revisar na barra inferior'});
+  const overCats=top5.filter(([n,v])=>BUDGET[n]&&v>BUDGET[n]*nMonths);
+  overCats.forEach(([n,v])=>alerts.push({type:'danger',title:`${n} acima do orçado`,body:`${fmt(v)} vs ${fmt(BUDGET[n]*nMonths)} orçado`}));
+  if(alerts.length===0) alerts.push({type:'ok',title:'Tudo dentro do orçado',body:'Nenhum alerta no momento'});
   document.getElementById('home-alerts').innerHTML=alerts.map(a=>`
     <div class="alert-item ${a.type}">
       <div class="alert-title">${a.title}</div>
@@ -1261,28 +1285,21 @@ async function confirmImport() {
 
 // ── HOME PIZZA ────────────────────────────────────────
 function renderHomePizza(txs) {
-  const ag = aggregate(txs, null); // all months
-  const top8 = Object.entries(ag.bySub)
-    .filter(([k]) => k !== 'NÃO CATEGORIZADO')
-    .sort((a,b) => b[1]-a[1]).slice(0, 8);
-  const others = Object.entries(ag.bySub)
-    .filter(([k]) => k !== 'NÃO CATEGORIZADO')
-    .sort((a,b) => b[1]-a[1]).slice(8)
-    .reduce((s,[,v]) => s+v, 0);
-  const segs = top8.map(([label,v],i) => ({label, v, c:COLORS[i]}));
-  if (others > 0) segs.push({label:'Outros', v:others, c:'#C8D8E8'});
-  const total = segs.reduce((s,x)=>s+x.v, 0);
-
-  const el = document.getElementById('home-pizza');
-  if (!el) return;
-  el.innerHTML = `<div class="pizza-wrap">
-    ${donutSVG(segs, 72, 72, 58, 28)}
-    <div style="position:absolute;top:50%;left:72px;transform:translate(-50%,-50%);text-align:center;pointer-events:none">
-      <div style="font-size:9px;color:var(--muted);letter-spacing:.08em">TOTAL</div>
-      <div style="font-family:'Cormorant Garamond',serif;font-size:18px;font-weight:400;color:var(--text)">${fmtK(total)}</div>
+  const allSubs={};
+  txs.forEach(t=>{ if(t.sub&&t.sub!=='NÃO CATEGORIZADO') allSubs[t.sub]=(allSubs[t.sub]||0)+(parseFloat(t.val)||0); });
+  const top5=Object.entries(allSubs).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const segs=top5.map(([label,v],i)=>({label,v,c:COLORS[i]}));
+  const total=segs.reduce((s,x)=>s+x.v,0);
+  const el=document.getElementById('home-pizza');
+  if(!el) return;
+  el.innerHTML=`<div style="display:flex;align-items:center;gap:16px;position:relative">
+    ${donutSVG(segs,60,60,46,20)}
+    <div style="position:absolute;top:50%;left:60px;transform:translate(-50%,-50%);text-align:center;pointer-events:none">
+      <div style="font-size:8px;color:var(--muted)">TOP 5</div>
+      <div style="font-family:'Cormorant Garamond',serif;font-size:14px;font-weight:400;color:var(--text)">${pctOf(total,txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0))}%</div>
     </div>
-    <div class="pizza-legend">
-      ${segs.map(s=>`<div class="pizza-leg-row">
+    <div style="flex:1;display:flex;flex-direction:column;gap:5px">
+      ${segs.map(s=>`<div class="pizza-leg-row" onclick="openDetail('${s.label}')" style="cursor:pointer">
         <div class="pizza-leg-dot" style="background:${s.c}"></div>
         <div class="pizza-leg-name">${s.label}</div>
         <div class="pizza-leg-val">${fmtK(s.v)}</div>
@@ -1791,8 +1808,13 @@ function checkPinSession() {
 
 function unlockApp() {
   sessionStorage.setItem(SESSION_KEY, Date.now().toString());
-  document.getElementById('pin-screen').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
+  const pin = document.getElementById('pin-screen');
+  const app = document.getElementById('app');
+  if (pin) pin.style.display = 'none';
+  if (app) {
+    app.style.display = 'flex';
+    app.style.flexDirection = 'column';
+  }
   loadData();
 }
 
