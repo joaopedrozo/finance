@@ -131,24 +131,32 @@ async function sheetsPost(body) {
 
 // ── LOAD ──────────────────────────────────────────
 async function loadData(silent=false) {
-  if (!silent) showLoading(true);
   STATE.error = null;
-  if (isConfigured()) {
-    try {
-      let remote = await sheetsGet('getTxs');
-      if (!remote||remote.length===0) { seedData(); await sheetsPost({action:'addTxs',txs:cache.load()}); remote=await sheetsGet('getTxs'); showToast('Dados enviados ao Sheets!','ok'); }
-      STATE.txs=remote; STATE.synced=true; cache.save(remote);
-    } catch(e) {
-      STATE.error='Offline'; STATE.txs=cache.load(); STATE.synced=false;
-      if (STATE.txs.length===0) { seedData(); STATE.txs=cache.load(); }
-    }
-  } else {
-    STATE.txs=cache.load(); STATE.synced=false;
-    if (STATE.txs.length===0) { seedData(); STATE.txs=cache.load(); }
-  }
-  if (!silent) showLoading(false);
+  // 1. Show local data immediately (never wait for network to render)
+  STATE.txs = cache.load();
   if (STATE.txs.length === 0) { seedData(); STATE.txs = cache.load(); }
+  STATE.synced = false;
   refreshAll();
+
+  // 2. Try to sync with Sheets in background
+  if (!isConfigured()) return;
+  if (!silent) showLoading(true);
+  try {
+    const timeout = new Promise((_,r) => setTimeout(() => r(new Error('timeout')), 8000));
+    let remote = await Promise.race([sheetsGet('getTxs'), timeout]);
+    if (!remote || remote.length === 0) {
+      await sheetsPost({action:'addTxs', txs:cache.load()});
+      remote = await Promise.race([sheetsGet('getTxs'), timeout]);
+      showToast('Dados enviados ao Sheets!','ok');
+    }
+    STATE.txs = remote; STATE.synced = true; cache.save(remote);
+    refreshAll();
+  } catch(e) {
+    STATE.error = 'Offline';
+  } finally {
+    if (!silent) showLoading(false);
+    setSyncBadge();
+  }
 }
 
 // ── UI HELPERS ────────────────────────────────────
