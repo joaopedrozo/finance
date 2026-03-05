@@ -235,11 +235,7 @@ function donutSVG(segs,cx=60,cy=60,r=46,stroke=10) {
 function refreshAll() {
   setSyncBadge(); updateReviewBadge();
   const active=document.querySelector('.screen.active')?.id?.replace('screen-','');
-  if (active==='home')        renderHome();
-  if (active==='despesas')    renderDespesas();
-  if (active==='comparativo') renderComparativo();
-  if (active==='patrimonio')  renderPatrimonio();
-  if (active==='ajustes')     renderAjustes();
+  if(active) renderScreen(active);
 }
 
 // ── HOME ──────────────────────────────────────────
@@ -1037,8 +1033,15 @@ function showScreen(id) {
     const n=document.getElementById('nav-'+s); if(n) n.classList.toggle('active',s===id);
   });
   document.querySelector('.scroll-area').scrollTop=0;
-  if(id==='ajustes') renderAjustes();
-  refreshAll();
+  renderScreen(id);
+}
+
+function renderScreen(id) {
+  if(id==='home')        renderHome();
+  if(id==='despesas')    renderDespesas();
+  if(id==='comparativo') renderComparativo();
+  if(id==='patrimonio')  renderPatrimonio();
+  if(id==='ajustes')     renderAjustes();
 }
 
 // ── PIN ───────────────────────────────────────────
