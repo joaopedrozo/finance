@@ -119,6 +119,8 @@ const reviewed = {
 
 // ── STATE ─────────────────────────────────────────
 const STATE = { txs:[], synced:false, error:null };
+let activeMonth = '02'; // mês atual padrão
+let despSort = 'valor_desc';
 
 // ── SHEETS ────────────────────────────────────────
 const isConfigured = () => SHEETS_URL && SHEETS_URL.includes('script.google.com');
