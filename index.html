@@ -112,24 +112,24 @@
     </div>
 
     <div id="screen-despesas" class="screen">
-      <div class="month-pills-wrap"><div class="month-pills" id="month-pills"></div></div>
+      <div class="month-pills-wrap" style="padding-top:8px"><div class="month-pills" id="month-pills"></div></div>
       <div class="card">
         <div class="card-header">
           <div>
             <div class="card-title">Total do mês</div>
-            <div id="desp-kpi-total" style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:400;color:var(--red)"></div>
+            <div id="desp-kpi-total" style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:400;color:var(--blue)"></div>
           </div>
           <div style="text-align:right">
             <div style="display:flex;gap:12px">
               <div><div style="font-size:9px;color:var(--muted)">Fixa</div><div id="desp-kpi-fixa" style="font-size:12px;color:var(--blue);cursor:pointer" onclick="openDetailCat('fixa')"></div></div>
-              <div><div style="font-size:9px;color:var(--muted)">Variável</div><div id="desp-kpi-var" style="font-size:12px;color:var(--gold);cursor:pointer" onclick="openDetailCat('variavel')"></div></div>
+              <div><div style="font-size:9px;color:var(--muted)">Variável</div><div id="desp-kpi-var" style="font-size:12px;color:var(--muted2);cursor:pointer" onclick="openDetailCat('variavel')"></div></div>
             </div>
           </div>
         </div>
-        <div style="display:flex;gap:6px;padding:0 0 10px">
+        <div style="display:flex;gap:6px;padding:0 16px 12px">
           <button id="dsort-val" class="sort-pill active" onclick="setDespSort('valor_desc')">Valor ↓</button>
           <button id="dsort-alpha" class="sort-pill" onclick="setDespSort('alpha')">A–Z</button>
-          <button id="dsort-bud" class="sort-pill" onclick="setDespSort('budget_pct')">Desvio</button>
+          <button id="dsort-bud" class="sort-pill" onclick="setDespSort('budget_pct')">% Orç</button>
         </div>
         <div class="card-body" id="desp-table"></div>
       </div>
@@ -142,6 +142,10 @@
         <div id="cmp-barchart"></div>
       </div>
       <div class="card">
+        <div class="card-header"><div class="card-title">Fixa vs Variável — Acumulado</div></div>
+        <div id="cmp-donut" style="display:flex;align-items:center;gap:12px;padding:4px 0 8px"></div>
+      </div>
+      <div class="card">
         <div class="card-header">
           <div class="card-title">Por Categoria</div>
           <div style="display:flex;gap:6px">
@@ -150,10 +154,6 @@
           </div>
         </div>
         <div id="cmp-rows"></div>
-      </div>
-      <div class="card">
-        <div class="card-header"><div class="card-title">Fixa vs Variável</div></div>
-        <div id="cmp-donut" style="display:flex;align-items:center;gap:12px;padding:0 0 4px"></div>
       </div>
       <div style="height:8px"></div>
     </div>
@@ -190,7 +190,8 @@
           <div style="font-size:12px;color:var(--muted)">Acima de <b id="review-threshold-val">R$ 1.000</b></div>
           <button onclick="openThresholdModal()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:4px 8px">Alterar</button>
         </div>
-        <div id="review-skipped" style="margin:0 16px 8px;font-size:11px;color:var(--muted)"></div>
+        <div id="review-skipped" style="margin:0 16px 4px;font-size:11px;color:var(--muted)"></div>
+        <div style="padding:0 16px 8px"><button id="mark-all-reviewed-btn" onclick="markAllReviewed()" style="display:none;width:100%;padding:10px;background:var(--s2);border:1px solid var(--border);border-radius:10px;font-size:12px;color:var(--muted2);cursor:pointer;font-family:inherit"></button></div>
         <div id="review-card-wrap">
           <div style="padding:0 16px 8px;display:flex;align-items:center;gap:12px">
             <div style="flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden">

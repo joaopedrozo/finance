@@ -151,7 +151,13 @@ async function loadData(silent=false) {
       remote = await Promise.race([sheetsGet('getTxs'), timeout]);
       showToast('Dados enviados ao Sheets!','ok');
     }
-    STATE.txs = remote; STATE.synced = true; cache.save(remote);
+    // Merge: preserve local category edits (reviewed items may have been re-categorized)
+    const localRev = reviewed.load();
+    const localCache = cache.load();
+    const localEdits = {};
+    localCache.forEach(t => { if(localRev[t.id]) localEdits[t.id] = {sub:t.sub, cat:t.cat, obs:t.obs}; });
+    const merged = remote.map(t => localEdits[t.id] ? {...t, ...localEdits[t.id]} : t);
+    STATE.txs = merged; STATE.synced = true; cache.save(merged);
     refreshAll();
   } catch(e) {
     STATE.error = 'Offline';
@@ -266,8 +272,6 @@ function renderHome() {
   const allMonths=['01','02','03','04','05','06','07','08','09','10','11','12'];
   const barMax=Math.max(...allMonths.map(m=>byM[m]||0),budMensal,1);
 
-  const overCats=top5.filter(([n,v])=>BUDGET[n]&&v>BUDGET[n]*nMonths).map(([n])=>n+' acima do orçado');
-  const alerts=overCats;
 
   document.getElementById('home-dashboard').innerHTML=
     '<div class="dash-wrap">'+
@@ -280,8 +284,8 @@ function renderHome() {
         '<div class="dash-sub">'+nMonths+' '+(nMonths===1?'mês':'meses')+' · '+pctUsado.toFixed(0)+'% do orçado</div>'+
       '</div>'+
       '<div class="dash-hero-right">'+
-        '<div class="dash-saldo-label">'+(over?'Estouro':'Saldo')+'</div>'+
-        '<div class="dash-saldo '+(over?'dash-over':'')+'">'+(over?'−':'+')+' '+fmtK(Math.abs(saldo))+'</div>'+
+        '<div class="dash-saldo-label">Saldo</div>'+
+        '<div class="dash-saldo">'+fmtK(Math.abs(saldo))+'</div>'+
       '</div>'+
     '</div>'+
     '<div class="dash-prog-track"><div class="dash-prog-fill '+(over?'dash-prog-over':'')+'" style="width:'+Math.min(pctUsado,100).toFixed(1)+'%"></div></div>'+
@@ -290,10 +294,10 @@ function renderHome() {
     '<div class="dash-months">'+
     monthCards.map(({m,ag,ov},i)=>
       (i>0?'<div class="dash-month-div"></div>':'')+
-      '<div class="dash-month-card '+(ov?'dash-month-over':'')+'" onclick="showScreen(\'despesas\');setMonth(\''+String(m).padStart(2,'0')+'\')">'+
+      '<div class="dash-month-card" onclick="showScreen(\'despesas\');setMonth(\''+String(m).padStart(2,'0')+'\')">'+
         '<div class="dash-month-name">'+MNAMES[m-1].slice(0,3)+'</div>'+
         '<div class="dash-month-val">'+fmtK(ag.total)+'</div>'+
-        '<div class="dash-month-sub">'+(ov?'▲ estouro':'▼ ok')+'</div>'+
+        '<div class="dash-month-sub">'+fmtK(ag.total)+'</div>'+
       '</div>'
     ).join('')+
     '</div>'+
@@ -306,8 +310,8 @@ function renderHome() {
       return '<div class="dash-cat-row" onclick="showScreen(\'despesas\')">'+
         '<div class="dash-cat-dot" style="background:'+COLORS[i]+'"></div>'+
         '<div class="dash-cat-name">'+name+'</div>'+
-        '<div class="dash-cat-bar-wrap"><div class="dash-cat-bar" style="width:'+(val/maxV*100).toFixed(1)+'%;background:'+(ov?'var(--red)':COLORS[i])+'"></div></div>'+
-        '<div class="dash-cat-val '+(ov?'dash-over':'')+'">'+fmtK(val)+'</div>'+
+        '<div class="dash-cat-bar-wrap"><div class="dash-cat-bar" style="width:'+(val/maxV*100).toFixed(1)+'%;background:'+COLORS[i]+'"></div></div>'+
+        '<div class="dash-cat-val">'+fmtK(val)+'</div>'+
       '</div>';
     }).join('')+
     '</div>'+
@@ -321,15 +325,12 @@ function renderHome() {
       return '<div class="dash-bar-col" '+(active?'onclick="showScreen(\'despesas\');setMonth(\''+mo+'\')" style="cursor:pointer"':'')+'>'+
         '<div class="dash-bar-wrap">'+
         '<div class="dash-budget-line" style="bottom:'+(budMensal/barMax*100).toFixed(1)+'%"></div>'+
-        '<div class="dash-bar-fill '+(ov?'dash-bar-over':active?'dash-bar-active':'dash-bar-empty')+'" style="height:'+h.toFixed(1)+'%"></div>'+
+        '<div class="dash-bar-fill '+(active?'dash-bar-active':'dash-bar-empty')+'" style="height:'+h.toFixed(1)+'%"></div>'+
         '</div>'+
         '<div class="dash-bar-lbl">'+MNAMES[i].slice(0,1)+'</div>'+
       '</div>';
     }).join('')+
     '</div>'+
-
-    // 5. ALERTAS
-    (alerts.length?'<div class="dash-alerts">'+alerts.map(a=>'<div class="dash-alert-item">⚠ '+a+'</div>').join('')+'</div>':'')+
 
     '</div>';
 }
@@ -397,21 +398,20 @@ function renderDespesas() {
           '<div class="crh-top">'+
             '<div class="crh-name">'+name+'</div>'+
             '<div class="crh-right">'+
-              '<div class="crh-val '+(over?'crh-over':'')+'">'+fmt(val)+'</div>'+
+              '<div class="crh-val">'+fmt(val)+'</div>'+
               '<div id="arrow-'+i+'" class="crh-arrow">▼</div>'+
             '</div>'+
           '</div>'+
           '<div class="crh-meta">'+
             '<div class="crh-meta-left">'+
               (bud
-                ?'<span class="crh-bud-label">Orç: '+fmt(bud)+'</span><span class="crh-bud-sep">·</span><span class="crh-bud-pct '+(over?'crh-over':pctBud>80?'crh-warn':'')+'">'+pctBud.toFixed(0)+'% usado</span>'
+                ?'<span class="crh-bud-label">Orç: '+fmt(bud)+'</span><span class="crh-bud-sep">·</span><span class="crh-bud-pct">'+pctBud.toFixed(0)+'% usado</span>'
                 :'<span class="crh-bud-label" style="color:var(--muted)">Sem orçamento</span>')+
             '</div>'+
             '<div class="crh-rel">'+pctTotal.toFixed(0)+'% do mês · '+monthTxs.length+' lanç.</div>'+
           '</div>'+
           '<div class="crh-bar-track">'+
-            '<div class="crh-bar-fill '+(over?'crh-bar-over':'')+'" style="width:'+barW.toFixed(1)+'%"></div>'+
-            (over?'<div class="crh-bar-extra" style="width:'+Math.min(((val-bud)/bud*100),100).toFixed(1)+'%"></div>':'')+
+            '<div class="crh-bar-fill" style="width:'+barW.toFixed(1)+'%"></div>'+
           '</div>'+
         '</div>'+
         '<div id="catrow-'+i+'" class="cat-row-detail" style="display:none">'+
@@ -462,18 +462,19 @@ let cmpView='mensal', cmpMensalSort='total_desc', cmpAnualSort='spent_desc';
 
 function renderComparativo() {
   const txs=STATE.txs;
-  if(cmpView==='mensal') renderCmpMensal(txs); else renderCmpAnual(txs);
   const byM=byMonthTotals(txs);
   const budMensal=Object.values(BUDGET).reduce((a,b)=>a+b,0);
   document.getElementById('cmp-barchart').innerHTML=monthBarChart(byM,budMensal);
+  // Donut fixed vs variable — shown at top
   const acum=txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
   const fixa=txs.filter(t=>getCat(t.sub)==='Fixa').reduce((s,t)=>s+(parseFloat(t.val)||0),0);
-  const segs=[{label:'Fixas',v:fixa,c:'var(--blue)'},{label:'Variáveis',v:acum-fixa,c:'var(--gold)'}];
+  const segs=[{label:'Fixas',v:fixa,c:'var(--blue)'},{label:'Variáveis',v:acum-fixa,c:'#64A0F0'}];
   document.getElementById('cmp-donut').innerHTML=segs[0].v>0
     ?donutSVG(segs,50,50,38,14)+'<div class="donut-legend-v">'+segs.map(s=>
       '<div class="donut-leg-item"><div class="donut-leg-dot" style="background:'+s.c+'"></div>'+
       '<div class="donut-leg-name">'+s.label+'</div><div class="donut-leg-val">'+fmtK(s.v)+'</div>'+
       '<div class="donut-leg-pct">'+pctOf(s.v,acum)+'</div></div>').join('')+'</div>':'';
+  if(cmpView==='mensal') renderCmpMensal(txs); else renderCmpAnual(txs);
 }
 
 function setCmpView(v) {
@@ -511,7 +512,7 @@ function renderCmpMensal(txs) {
     html+='<tr onclick="openDetail(\''+sub+'\')"><td class="bud-cat">'+sub+'</td><td class="bud-bud" style="text-align:right;color:var(--muted)">'+(bud?fmtK(bud):'—')+'</td>'+
       activeMths.map(m=>{const v=byMonth[m]||0,ov=bud&&v>bud;return'<td class="bud-m '+(ov?'cell-over':v>0?'cell-ok':'cell-empty')+'" style="text-align:right">'+(v>0?fmtK(v):'—')+'</td>';}).join('')+
       '<td class="bud-tot" style="text-align:right;color:'+(over?'var(--red)':'var(--text)')+'">'+fmtK(total)+'</td>'+
-      '<td class="bud-m" style="text-align:right">'+(pct?'<span style="font-size:10px;font-weight:600;color:'+(over?'var(--red)':parseInt(pct)>80?'#C07010':'var(--green)')+'">'+pct+'%</span>':'—')+'</td></tr>';
+      '<td class="bud-m" style="text-align:right">'+(pct?'<span style="font-size:10px;font-weight:600;color:'+(over?'var(--blue)':'var(--green)')+'">'+pct+'%</span>':'—')+'</td></tr>';
   });
   html+='</tbody></table></div>';
   document.getElementById('cmp-rows').innerHTML=html;
@@ -545,9 +546,9 @@ function renderCmpAnual(txs) {
     const budA=(BUDGET[sub]||0)*12,saldo=budA-spent,pct=budA?Math.min((spent/budA*100),999):null,over=budA&&spent>budA;
     html+='<tr onclick="openDetail(\''+sub+'\')"><td class="bud-cat">'+sub+'</td>'+
       '<td class="bud-bud" style="text-align:right;color:var(--muted)">'+(budA?fmtK(budA):'—')+'</td>'+
-      '<td class="bud-bud" style="text-align:right;color:'+(over?'var(--red)':'var(--text)')+';font-weight:600">'+fmtK(spent)+'</td>'+
+      '<td class="bud-bud" style="text-align:right;color:var(--text);font-weight:600">'+fmtK(spent)+'</td>'+
       '<td class="bud-bud" style="text-align:right;color:'+(over?'var(--red)':'var(--green)')+'">'+( budA?(over?'−':'+')+fmtK(Math.abs(saldo)):'—')+'</td>'+
-      '<td class="bud-m" style="text-align:right">'+(pct!==null?'<span style="font-size:10px;font-weight:600;color:'+(over?'var(--red)':pct>80?'#C07010':'var(--green)')+'">'+pct.toFixed(0)+'%</span>':'—')+'</td></tr>';
+      '<td class="bud-m" style="text-align:right">'+(pct!==null?'<span style="font-size:10px;font-weight:600;color:'+(over?'var(--blue)':'var(--green)')+'">'+pct.toFixed(0)+'%</span>':'—')+'</td></tr>';
   });
   html+='</tbody></table>';
   document.getElementById('cmp-rows').innerHTML=html;
@@ -597,13 +598,24 @@ function setAjusteTab(tab) {
 // ── REVISAR ───────────────────────────────────────
 let reviewQueue=[], reviewIdx=0;
 
+function markAllReviewed() {
+  const rev=reviewed.load();
+  STATE.txs.forEach(t=>{ if(!rev[t.id]) rev[t.id]='ok'; });
+  localStorage.setItem('jcrp_reviewed',JSON.stringify(rev));
+  showToast('Todos marcados como revisados ✓','ok');
+  renderRevisar();
+}
+
 function renderRevisar() {
   const rev=reviewed.load(), minVal=threshold.get();
   document.getElementById('review-threshold-val').textContent=fmt(minVal);
   reviewQueue=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal).sort((a,b)=>parseFloat(b.val)-parseFloat(a.val));
   reviewIdx=0;
   const skipped=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)<minVal).length;
+  const pendingCount = STATE.txs.filter(t=>!rev[t.id]).length;
   document.getElementById('review-skipped').textContent=skipped>0?skipped+' lançamento'+(skipped>1?'s':'')+' abaixo do limite.':'';
+  const markAllBtn = document.getElementById('mark-all-reviewed-btn');
+  if(markAllBtn) { markAllBtn.style.display = pendingCount>0?'block':'none'; markAllBtn.textContent='Marcar todos os '+pendingCount+' como revisados'; }
   showReviewCard();
 }
 
