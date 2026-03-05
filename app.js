@@ -1975,9 +1975,5 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('split-modal').addEventListener('click',e=>{
     if (e.target===document.getElementById('split-modal')) closeSplit();
   });
-  // PIN check
-  if (checkPinSession()) {
-    unlockApp();
-  }
-  // else PIN screen stays visible
+  loadData();
 });
