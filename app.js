@@ -1250,3 +1250,394 @@ function setAjusteTab(tab) {
   if(tab==='concil')  renderConciliacao();
   updateReviewBadge();
 }
+
+
+// ── RECOVERED FUNCTIONS ─────────────────────────────────────────────────────
+
+function handleFiles(files) {
+  pendingTxs = [];
+  const logEl = document.getElementById('import-log');
+  logEl.innerHTML = '';
+
+  Array.from(files).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const text = e.target.result;
+      // Detect type
+      let type = 'card';
+      const fname = file.name.toLowerCase();
+      if (fname.includes('unicred') && fname.includes('fatura')) type = 'card_unicred';
+      else if (fname.includes('unicred') || fname.includes('extrato-')) type = 'unicred';
+      else if (fname.includes('itau') || fname.includes('extrato_conta')) type = 'itau';
+
+      const txs = parseCSV(text, type);
+      pendingTxs.push(...txs);
+
+      logEl.innerHTML = pendingTxs.map(t => `
+        <div class="log-item">
+          <div class="log-dot" style="background:${t.sub==='N\u00c3O CATEGORIZADO'?'#E05C6A':'#4CAF82'}"></div>
+          <div style="flex:1">
+            <div class="log-desc">${t.desc.slice(0,40)}</div>
+            <div class="log-sub">${t.sub}</div>
+          </div>
+          <div class="log-val">${fmt(t.val)}</div>
+        </div>`).join('');
+
+      document.getElementById('import-count').textContent = `${pendingTxs.length} lan\u00e7amentos detectados`;
+      document.getElementById('btn-confirm').disabled = pendingTxs.length === 0;
+    };
+    reader.readAsText(file, 'latin-1');
+  });
+}
+
+function confirmImport() {
+  const added = DB.add(pendingTxs);
+  document.getElementById('import-count').textContent = `\u2713 ${added} novos lan\u00e7amentos adicionados!`;
+  document.getElementById('btn-confirm').disabled = true;
+  pendingTxs = [];
+  renderHome();
+  renderDespesas();
+  renderComparativo();
+}
+
+function parseCSV(text, type) {
+  const lines = text.split('\n');
+  const results = [];
+  const TODAY = new Date();
+  const DATE_RE = /^\d{2}\/\d{2}\/\d{4}$/;
+
+  // Detect future section
+  let futureLine = lines.findIndex(l => /futuros/i.test(l));
+  if (futureLine === -1) futureLine = Infinity;
+
+  // Detect separator (comma or semicolon)
+  const sep = lines.find(l => l.includes(';')) ? ';' : ',';
+
+  lines.forEach((line, i) => {
+    if (i >= futureLine) return;
+    const parts = line.trim().split(sep);
+    if (parts.length < 4) return;
+
+    let dateStr, desc, valStr;
+
+    if (type === 'card_unicred') {
+      // Data;Horario;Descricao;Valor
+      dateStr = parts[0].trim();
+      desc    = parts[2].trim();
+      valStr  = parts[3].trim();
+    } else {
+      // Ita\u00fa/Unicred: ,date,desc,,val  or  date,desc,,val
+      const offset = parts[0].trim() === '' ? 1 : 0;
+      dateStr = parts[offset].trim();
+      desc    = parts[offset+1].trim();
+      valStr  = parts[offset+3].trim();
+    }
+
+    if (!DATE_RE.test(dateStr)) return;
+    const [d,m,y] = dateStr.split('/');
+    const date = new Date(`${y}-${m}-${d}`);
+    if (date > TODAY) return;
+
+    const rawVal = parseFloat(valStr.replace(',','.'));
+    if (isNaN(rawVal) || rawVal === 0) return;
+
+    // For card: skip negative (payments)
+    if (type === 'card_unicred' && rawVal < 0) return;
+    // For bank: only debits (negative)
+    if (type !== 'card_unicred' && rawVal > 0) return;
+
+    const val = Math.abs(rawVal);
+    const { cat, sub, pessoa } = categorize(desc, type === 'card_unicred' ? 'card' : type);
+    if (!cat) return; // skip
+
+    results.push({
+      date: `${y}-${m}-${d}`,
+      desc, val, cat, sub,
+      pessoa: pessoa || '',
+      obs: '', source: type,
+      id: `${y}${m}${d}_${desc.slice(0,8)}_${val}`
+    });
+  });
+
+  return results;
+}
+
+function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
+
+function rejectCard() {
+  if (reviewIdx>=reviewQueue.length) return;
+  const newSub=document.getElementById('review-select').value;
+  const t=reviewQueue[reviewIdx];
+  // Update in STATE and cache
+  STATE.txs=STATE.txs.map(tx=>tx.id===t.id?{...tx,sub:newSub}:tx);
+  cache.save(STATE.txs);
+  if (isConfigured()) sheetsPost({action:'updateTx',tx:{...t,sub:newSub}}).catch(()=>{});
+  reviewed.reject(t.id,newSub);
+  swipeCard('left', ()=>{ reviewIdx++; showReviewCard(); });
+}
+
+function approveCard() {
+  if (reviewIdx>=reviewQueue.length) return;
+  reviewed.approve(reviewQueue[reviewIdx].id);
+  swipeCard('right', ()=>{ reviewIdx++; showReviewCard(); });
+}
+
+function skipCard() {
+  reviewIdx++; showReviewCard();
+}
+
+function initSwipe() {
+  const card=document.getElementById('review-card');
+  if (!card) return;
+  card.addEventListener('touchstart',e=>{ swipeStartX=e.touches[0].clientX; },{passive:true});
+  card.addEventListener('touchend',e=>{
+    const dx=e.changedTouches[0].clientX-swipeStartX;
+    if (dx>60) approveCard();
+    else if (dx<-60) rejectCard();
+  },{passive:true});
+}
+
+function openManual() {
+  document.getElementById('manual-modal').classList.add('open');
+  document.getElementById('manual-sub').innerHTML = ALL_SUBS.map(s=>`<option value="${s}">${s}</option>`).join('');
+}
+
+function closeManual() { document.getElementById('manual-modal').classList.remove('open'); }
+
+async function saveManual() {
+  const date  = document.getElementById('manual-date').value;
+  const desc  = document.getElementById('manual-desc').value.trim();
+  const val   = parseFloat(document.getElementById('manual-val').value.replace(',','.'));
+  const sub   = document.getElementById('manual-sub').value;
+  const obs   = document.getElementById('manual-obs').value.trim();
+  if (!date||!desc||!val) { showToast('Preencha data, descri\u00e7\u00e3o e valor','warn'); return; }
+  const cat   = getCat(sub);
+  const id    = `manual_${date.replace(/-/g,'')}_${desc.slice(0,8).replace(/\\s/g,'')}_${val}`;
+  const tx    = {id, date, desc, val, cat, sub, pessoa:'', obs, source:'manual'};
+  const added = await syncTxs([tx]);
+  showToast(added>0?`\u2713 Lan\u00e7amento adicionado!`:'Lan\u00e7amento j\u00e1 existe','ok');
+  closeManual();
+  refreshAll();
+}
+
+function onEditSubChange() {
+  const sub = document.getElementById('edittx-sub').value;
+  document.getElementById('edittx-cat').value = getCat(sub);
+}
+
+function onReviewSubChange() {
+  const sub = document.getElementById('review-select').value;
+  document.getElementById('review-cat').value = getCat(sub);
+}
+
+function addSplitPart() {
+  const t = STATE.txs.find(x=>x.id===splitTxId);
+  splitParts.push({desc:'', sub: t?.sub||ALL_SUBS[0], val:''});
+  renderSplitParts();
+}
+
+function setReviewThreshold() {
+  const input=document.getElementById('review-threshold-input');
+  const val=parseFloat(input.value);
+  if (!isNaN(val)&&val>=0) {
+    threshold.set(val);
+    document.getElementById('review-threshold-modal').classList.remove('open');
+    renderRevisar();
+    showToast(`Limite atualizado: ${fmt(val)}`,'ok');
+  }
+}
+
+function closeThresholdModal() {
+  document.getElementById('review-threshold-modal').classList.remove('open');
+}
+
+function showImportPreview() {
+  const existing = cache.load();
+  const {fresh, dupes, exact} = detectDuplicates(pendingTxs, existing);
+  const logEl = document.getElementById('import-log');
+
+  let html='';
+
+  if (fresh.length>0) {
+    html+=`<div class="import-section-label import-ok">\u2713 ${fresh.length} novos \u2014 ser\u00e3o adicionados</div>`;
+    html+=fresh.map(t=>`<div class="log-item">
+      <div class="log-dot" style="background:${t.sub==='N\u00c3O CATEGORIZADO'?'#C0392B':'#1A8C5B'}"></div>
+      <div style="flex:1"><div class="log-desc">${t.desc.slice(0,40)}</div>
+      <div class="log-sub">${t.date} \u00b7 ${t.sub}</div></div>
+      <div class="log-val">${fmt(t.val)}</div></div>`).join('');
+  }
+
+  if (dupes.length>0) {
+    html+=`<div class="import-section-label import-warn">\u26a0 ${dupes.length} poss\u00edveis duplicatas \u2014 verifique</div>`;
+    html+=dupes.map(({tx,similar})=>`<div class="log-item" style="border-left:3px solid #E8A020">
+      <div class="log-dot" style="background:#E8A020"></div>
+      <div style="flex:1">
+        <div class="log-desc">${tx.desc.slice(0,38)}</div>
+        <div class="log-sub">${tx.date} \u00b7 similar a: ${similar.date} ${similar.desc.slice(0,20)}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="log-val">${fmt(tx.val)}</div>
+        <label style="font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px">
+          <input type="checkbox" class="dupe-include" data-id="${tx.id}" style="width:12px;height:12px"> incluir
+        </label>
+      </div></div>`).join('');
+  }
+
+  if (exact.length>0) {
+    html+=`<div class="import-section-label import-muted">\u2717 ${exact.length} j\u00e1 existentes \u2014 ignorados</div>`;
+  }
+
+  logEl.innerHTML=html;
+  document.getElementById('import-count').textContent=
+    `${fresh.length} novos \u00b7 ${dupes.length} a verificar \u00b7 ${exact.length} ignorados`;
+  document.getElementById('btn-confirm').disabled=(fresh.length===0&&dupes.length===0);
+}
+
+function expandParcelas(txs) {
+  const extra = [];
+  txs.forEach(t => {
+    const m = t.desc.match(/(\d{2})\/(\d{2})/);
+    if (!m) return;
+    const cur = parseInt(m[1]), tot = parseInt(m[2]);
+    if (cur < 1 || tot < 2 || cur > tot) return;
+    const remaining = tot - cur;
+    const [y, mo, d] = t.date.split('-').map(Number);
+    for (let i = 1; i <= remaining; i++) {
+      let nm = mo + i, ny = y;
+      while (nm > 12) { nm -= 12; ny++; }
+      const ndate = `${ny}-${String(nm).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const nDesc = t.desc.replace(/\d{2}\/\d{2}/, `${String(cur+i).padStart(2,'0')}/${String(tot).padStart(2,'0')}`);
+      extra.push({
+        ...t,
+        id: `${t.id}_p${cur+i}`,
+        date: ndate,
+        desc: nDesc,
+        obs: t.obs ? t.obs + ` (parcela ${cur+i}/${tot})` : `parcela ${cur+i}/${tot}`,
+        source: t.source + '_parcela'
+      });
+    }
+  });
+  return [...txs, ...extra];
+}
+
+function renderSplitParts() {
+  const total = parseFloat(document.getElementById('split-original-val').dataset.total)||0;
+  const used  = splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
+  const remaining = total - used;
+  document.getElementById('split-remaining').textContent =
+    `Restante: ${fmt(remaining)} de ${fmt(total)}`;
+  document.getElementById('split-remaining').style.color =
+    Math.abs(remaining)<0.01 ? 'var(--green)' : remaining<0 ? 'var(--red)' : 'var(--muted)';
+
+  document.getElementById('split-parts').innerHTML = splitParts.map((p,i) => `
+    <div class="split-part">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted2)">Parte ${i+1}</div>
+        ${splitParts.length>2?`<span onclick="removeSplitPart(${i})" style="font-size:18px;color:var(--muted);cursor:pointer;line-height:1">\u00d7</span>`:''}
+      </div>
+      <div class="manual-field" style="margin-bottom:6px">
+        <label>Descri\u00e7\u00e3o</label>
+        <input type="text" value="${p.desc}" oninput="splitParts[${i}].desc=this.value" placeholder="Ex: Mercado">
+      </div>
+      <div style="display:flex;gap:8px">
+        <div class="manual-field" style="flex:1;margin-bottom:0">
+          <label>Categoria</label>
+          <select onchange="splitParts[${i}].sub=this.value">
+            ${ALL_SUBS.map(s=>`<option value="${s}" ${s===p.sub?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div class="manual-field" style="width:100px;margin-bottom:0">
+          <label>Valor (R$)</label>
+          <input type="number" value="${p.val}" step="0.01" placeholder="0,00"
+            oninput="splitParts[${i}].val=this.value;renderSplitParts()">
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function removeSplitPart(i) {
+  splitParts.splice(i,1);
+  renderSplitParts();
+}
+
+function openThresholdModal() {
+  document.getElementById('review-threshold-input').value=threshold.get();
+  document.getElementById('review-threshold-modal').classList.add('open');
+}
+
+function saveNewRule() {
+  const kw = document.getElementById('rule-kw').value.trim().toUpperCase();
+  const sub = document.getElementById('rule-sub').value;
+  if (!kw) { showToast('Digite uma palavra-chave','warn'); return; }
+  userRules.add(kw, sub);
+  document.getElementById('rule-kw').value = '';
+  renderRules();
+  showToast(`Regra "${kw}" \u2192 ${sub} salva \u2713`, 'ok');
+}
+
+function removeRule(kw) {
+  userRules.remove(kw);
+  renderRules();
+  showToast(`Regra "${kw}" removida`, 'ok');
+}
+
+function applyAndRefresh() {
+  const n = applyUserRulesToAll();
+  showToast(`${n} lan\u00e7amentos categorizados \u2713`, 'ok');
+  refreshAll();
+}
+
+function closeSearch() {
+  document.getElementById('search-modal').classList.remove('open');
+  document.getElementById('search-input').value = '';
+}
+
+function getCfg() {
+  try { return JSON.parse(localStorage.getItem('jcrp_cfg') || 'null'); } catch { return null; }
+}
+function saveCfg(obj) {
+  localStorage.setItem('jcrp_cfg', JSON.stringify(obj));
+}
+
+function openSearch() {
+  document.getElementById('search-modal').classList.add('open');
+  setTimeout(()=>document.getElementById('search-input').focus(), 100);
+  runSearch();
+}
+function closeSplit() {
+  document.getElementById('split-modal').classList.remove('open');
+  splitTxId=null; splitParts=[];
+}
+function saveSplit() {
+  const t = STATE.txs.find(x=>x.id===splitTxId);
+  if (!t) return closeSplit();
+  const total = parseFloat(t.val)||0;
+  const used  = splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
+  if (Math.abs(used-total)>0.02) {
+    showToast(`Soma das partes (${fmt(used)}) \u2260 total (${fmt(total)})`,'warn');
+    return;
+  }
+  // Remove original, add parts
+  STATE.txs = STATE.txs.filter(x=>x.id!==splitTxId);
+  const newTxs = splitParts.map((p,i)=>({
+    ...t,
+    id: `${splitTxId}_s${i+1}`,
+    desc: p.desc||t.desc,
+    sub: p.sub,
+    cat: getCat(p.sub),
+    val: String(parseFloat(p.val)||0),
+    obs: (t.obs?t.obs+' \u00b7 ':'')+`fra\u00e7\u00e3o ${i+1}/${splitParts.length}`
+  }));
+  STATE.txs = [...STATE.txs, ...newTxs];
+  cache.save(STATE.txs);
+  if (isConfigured()) {
+    sheetsPost({action:'deleteTx', id:splitTxId}).catch(()=>{});
+    sheetsPost({action:'addTxs', txs:newTxs}).catch(()=>{});
+  }
+  reviewed.approve(splitTxId);
+  newTxs.forEach(tx=>reviewed.approve(tx.id));
+  closeSplit();
+  refreshAll();
+  showToast(`Dividido em ${splitParts.length} lan\u00e7amentos \u2713`,'ok');
+}
+
