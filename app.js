@@ -1641,3 +1641,24 @@ function saveSplit() {
   showToast(`Dividido em ${splitParts.length} lan\u00e7amentos \u2713`,'ok');
 }
 
+
+// ── NAVIGATION ────────────────────────────────────────────────
+const SCREENS = ['home','despesas','comparativo','patrimonio','ajustes'];
+
+function showScreen(id) {
+  SCREENS.forEach(s => {
+    const el = document.getElementById('screen-'+s);
+    if (el) el.classList.toggle('active', s===id);
+    const nav = document.getElementById('nav-'+s);
+    if (nav) nav.classList.toggle('active', s===id);
+  });
+  renderScreen(id);
+}
+
+function renderScreen(id) {
+  if      (id==='home')        renderHome();
+  else if (id==='despesas')    renderDespesas();
+  else if (id==='comparativo') renderComparativo();
+  else if (id==='patrimonio')  renderPatrimonio();
+  else if (id==='ajustes')     renderAjustes();
+}
