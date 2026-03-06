@@ -268,5 +268,13 @@
   <button class="fab" onclick="openManual()">＋</button>
 </div>
 <script src="app.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  }
+  loadData();
+});
+</script>
 </body>
 </html>
