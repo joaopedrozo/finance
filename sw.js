@@ -1,4 +1,4 @@
-const CACHE = 'pedrozo-v68';
+const CACHE = 'pedrozo-v69';
 const ASSETS = ['/', '/index.html', '/style.css', '/app.js', '/manifest.json'];
 
 self.addEventListener('install', e => {

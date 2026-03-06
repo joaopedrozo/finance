@@ -1365,5 +1365,6 @@ select {
 .pat-fundo-btn:active { background:var(--s3); }
 
 /* Hide btn in header */
-#hide-btn { opacity:.7; }
-#hide-btn:active { opacity:1; }
+#hide-btn { color:var(--muted2); }
+#hide-btn:active { color:var(--text); }
+#hide-btn svg { display:block; }
