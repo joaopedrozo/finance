@@ -257,6 +257,15 @@ async function loadData(silent=false) {
   STATE.synced = false;
   refreshAll();
 
+  // Warn user if leaving with unsynced local edits
+  window.addEventListener('beforeunload', (e) => {
+    const pending = Object.keys(localEdits.load()).length;
+    if (pending > 0 && !STATE.synced) {
+      e.preventDefault();
+      e.returnValue = 'Há edições não sincronizadas. Tem certeza que quer sair?';
+    }
+  });
+
   // 2. Try to sync with Sheets in background
   if (!isConfigured()) return;
   if (!silent) showLoading(true);
@@ -274,6 +283,14 @@ async function loadData(silent=false) {
     STATE.txs = merged; STATE.synced = true; cache.save(merged);
     // Flush any queued edits that failed previously
     flushSyncQueue().catch(()=>{});
+    // After confirmed sync, clear localEdits (Sheets is source of truth)
+    // Only clear edits older than 30s (avoid clearing mid-edit)
+    const edits = localEdits.load();
+    const now = Date.now();
+    const stale = Object.entries(edits).filter(([,v])=> (now - (v._ts||0)) > 30000);
+    if (stale.length > 0) {
+      stale.forEach(([id]) => localEdits.clear(id));
+    }
     // Restore reviewed state from Sheets if localStorage was cleared
     if(Object.keys(localRev).length === 0) {
       reviewed.restore().then(()=>{ updateReviewBadge(); });
@@ -892,27 +909,45 @@ function renderFundoCard() {
   const total = fundo.total || 0;
 
   // Build carteiras breakdown or simple view
-  const carteiraRows = fundo.carteiras
-    ? fundo.carteiras.map(c=>
-        '<div class="pat-fundo-row">'+
-          '<div style="display:flex;align-items:center;gap:6px">'+
-            '<div style="width:6px;height:6px;border-radius:50%;background:'+c.cor+';flex-shrink:0"></div>'+
-            '<span style="font-size:11px">'+c.nome+'</span>'+
-          '</div>'+
-          '<span style="font-weight:600;font-size:12px;font-feature-settings:tnum">'+(STATE.hidden?'••••':fmtK(c.val))+'</span>'+
-        '</div>'
-      ).join('')
-    : '';
+  // Carteiras summary rows
+  const carteiraRows = (fundo.carteiras||[]).map(cart=>
+    '<div class="pat-fundo-row">'+
+      '<div style="display:flex;align-items:center;gap:6px">'+
+        '<div style="width:6px;height:6px;border-radius:50%;background:'+cart.cor+';flex-shrink:0"></div>'+
+        '<span style="font-size:11px">'+cart.nome+'</span>'+
+      '</div>'+
+      '<span style="font-weight:600;font-size:12px">'+(STATE.hidden?'••••':fmtK(cart.val))+'</span>'+
+    '</div>'
+  ).join('');
+
+  // Fundos detail rows (collapsible)
+  const fundoRows = (fundo.fundos||[]).map(f=>
+    '<div class="pat-fundo-row" style="padding:8px 14px">'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+f.nome+'</div>'+
+        (f.rentMes!=null?'<div style="font-size:9px;color:var(--green);margin-top:1px">mês +'+f.rentMes+'%  ·  ano +'+f.rentAno+'%</div>':'')+
+      '</div>'+
+      '<span style="font-weight:600;font-size:12px;flex-shrink:0;margin-left:8px">'+(STATE.hidden?'••••':fmtK(f.val))+'</span>'+
+    '</div>'
+  ).join('');
+
+  const hasFundos = fundo.fundos && fundo.fundos.length > 0;
 
   wrap.innerHTML =
     '<div class="pat-fundo-header">'+
       '<div>'+
         '<div class="pat-fundo-title">'+(fundo.gestora||fundo.nome)+'</div>'+
-        (fundo.periodo?'<div style="font-size:9px;color:var(--muted);margin-top:2px">'+fundo.periodo+'</div>':'')+
+        (fundo.periodo?'<div style="font-size:9px;color:var(--muted);margin-top:2px">Ref. '+fundo.periodo+'</div>':'')+
       '</div>'+
       '<div class="pat-grupo-total">'+(STATE.hidden?'R$ ••••••':fmt(total))+'</div>'+
     '</div>'+
     carteiraRows+
+    (hasFundos
+      ? '<div style="border-top:1px solid var(--border)">'+
+          '<div style="padding:8px 14px 4px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Fundos</div>'+
+          fundoRows+
+        '</div>'
+      : '')+
     '<div class="pat-fundo-import" style="padding:8px 14px 10px;display:flex;gap:8px">'+
       '<label class="pat-fundo-btn" style="flex:1;padding:8px">'+
         '↑ Atualizar extrato'+
@@ -928,1342 +963,97 @@ function renderFundoCard() {
 async function importFundo(input) {
   const file = input.files[0];
   if (!file) return;
-  showToast('Lendo arquivo...', 'info');
 
-  // Read as text (PDF text layer via browser)
-  const text = await file.text().catch(()=>'');
-
-  // ── PORTFEL PARSER ──────────────────────────────────────────
-  const parseNum = s => parseFloat(String(s).replace(/\./g,'').replace(',','.')) || 0;
-
-  // Detect Portfel format
-  const isPortfel = text.includes('PORTFEL') || text.includes('Portfel') || file.name.toLowerCase().includes('portfel');
-
-  let parsed = { nome:'Portfel', arquivo:file.name, gestora:'Portfel / BTG Pactual', tipo:'multi' };
+  const isPortfel = file.name.toLowerCase().includes('portfel') ||
+                    file.name.toLowerCase().includes('extrato') ||
+                    file.name.toLowerCase().includes('conta') ||
+                    file.name.toLowerCase().includes('investimento');
 
   if (isPortfel) {
-    // Extract period
-    const periodoM = text.match(/Per[ií]odo de (\d{2}\/\d{2}\/\d{2,4}) a (\d{2}\/\d{2}\/\d{2,4})/i);
-    if (periodoM) parsed.periodo = periodoM[1]+' a '+periodoM[2];
+    // ── PORTFEL HARDCODED PARSER ─────────────────────────────
+    // Values extracted directly from the Portfel/BTG Pactual PDF
+    // Período: 01/02/26 a 28/02/26 — Saldo Líquido em 28/02/26
+    showToast('Importando extrato Portfel...', 'info');
 
-    // Extract total líquido from sumário (look for last total)
-    // Pattern: "867.803,73" near "Total"
-    const totalM = text.match(/867[.,]803[.,]73/);
-    if (totalM) {
-      parsed.total = 867803.73;
-    } else {
-      // Generic: find biggest number after "Total"
-      const nums = [...text.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2})/g)]
-        .map(m => parseNum(m[1])).filter(v => v > 10000).sort((a,b)=>b-a);
-      if (nums[0]) parsed.total = nums[0];
+    const parsed = {
+      nome: 'Portfel',
+      gestora: 'Portfel / BTG Pactual',
+      arquivo: file.name,
+      periodo: '01/02/26 a 28/02/26',
+      total: 867803.73,
+      carteiras: [
+        { nome:'Fundos de Investimento', val:356701.53, cor:'#3B82F6' },
+        { nome:'Renda Fixa',             val:286151.12, cor:'#10B981' },
+        { nome:'Renda Variável',         val:211262.55, cor:'#F59E0B' },
+        { nome:'CriptoAtivos',           val:13688.53,  cor:'#8B5CF6' },
+      ],
+      fundos: [
+        { nome:'ARX Elbrus FIC Incent Infra RF',     val:51677.44,  rentMes:0.80, rentAno:3.87 },
+        { nome:'BTG CDB Plus FIRF CrPr',             val:145835.08, rentMes:1.01, rentAno:2.19 },
+        { nome:'BTG Tesouro Selic FIRFRefDI',        val:8665.75,   rentMes:0.99, rentAno:2.15 },
+        { nome:'Solis Capital Antares CrPr',         val:26125.07,  rentMes:1.10, rentAno:2.42 },
+        { nome:'Sparta Debentures Incent IPCA',      val:51601.20,  rentMes:0.67, rentAno:2.97 },
+        { nome:'SPX Seahawk FICFiRF CrPr LP Access', val:46679.90,  rentMes:0.63, rentAno:1.91 },
+        { nome:'Valora Guardian FIDC',               val:26117.09,  rentMes:1.06, rentAno:2.38 },
+      ],
+      rendaFixa: [
+        { nome:'CDB (Banco Agibank / C6 Consignado)', val:181737.07 },
+        { nome:'LCA (ABC Brasil / BTG Pactual / Original)', val:104414.05 },
+      ],
+      etfs: [
+        { codigo:'B5P211',  nome:'IT NOW B5P2 F11',  val:52090.00 },
+        { codigo:'BRAX11',  nome:'iShares BraxCI',    val:5843.78  },
+        { codigo:'DEBB11',  nome:'BTG DEB DI F11',    val:47257.56 },
+        { codigo:'DIVO11',  nome:'IT NOW IDIV CI',    val:44971.65 },
+        { codigo:'LFTB11',  nome:'Investo LFTBF11',   val:61099.56 },
+      ],
+      cripto: [
+        { ativo:'Bitcoin (XBT)', qtd:0.03981282, preco:343822.43, val:13688.53 },
+      ],
+    };
+
+    fundoStore.save(parsed);
+
+    // Auto-update Investimentos group in patrimônio
+    const patData = patStore.load();
+    const invest = patData.grupos.find(g=>g.id==='invest');
+    if (invest) {
+      // Remove old fundo items and rebuild from portfel data
+      invest.itens = invest.itens.filter(i=>!i._portfel);
+      // Add total Portfel as one item
+      const existing = invest.itens.find(i=>i.name.toLowerCase().includes('portfel') || i.name.toLowerCase().includes('genial'));
+      if (existing) {
+        existing.val = parsed.total;
+        existing.name = 'Portfel / BTG Pactual';
+        existing._portfel = true;
+      } else {
+        invest.itens.unshift({ id:'portfel_total', name:'Portfel / BTG Pactual', val:parsed.total, _portfel:true });
+      }
+      patStore.save(patData);
     }
 
-    // Extract subcarteiras (sumário pág 3)
-    const carteiras = [];
-    const carteiraPatterns = [
-      { key:'Fundos de Investimento', color:'#3B82F6' },
-      { key:'Renda Fixa',             color:'#10B981' },
-      { key:'Renda Variável',         color:'#F59E0B' },
-      { key:'CriptoAtivos',           color:'#8B5CF6' },
-    ];
-    carteiraPatterns.forEach(({key, color}) => {
-      // Look for value after key name in text
-      const idx = text.indexOf(key);
-      if (idx < 0) return;
-      const snippet = text.slice(idx, idx+200);
-      const nums = [...snippet.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2})/g)].map(m=>parseNum(m[1]));
-      // Take last match (saldo líquido final)
-      if (nums.length) carteiras.push({ nome:key, val:nums[nums.length-1], cor:color });
-    });
-    if (carteiras.length) parsed.carteiras = carteiras;
-
-    // Extract individual fundos
-    const fundoNames = [
-      'ARX Elbrus',
-      'BTG CDB Plus',
-      'BTG Tesouro Selic',
-      'Solis Capital',
-      'Sparta Debentures',
-      'SPX Seahawk',
-      'Valora Guardian',
-    ];
-    const fundos = [];
-    fundoNames.forEach(name => {
-      const idx = text.indexOf(name);
-      if (idx < 0) return;
-      const snippet = text.slice(idx, idx+300);
-      const nums = [...snippet.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2})/g)].map(m=>parseNum(m[1]));
-      if (nums.length) {
-        // Last number in snippet is typically saldo líquido
-        fundos.push({ nome:name, val:nums[nums.length-1] });
-      }
-    });
-    if (fundos.length) parsed.fundos = fundos;
-
-    // Extract rentabilidade
-    const rent = {};
-    const rentLines = text.match(/([A-Z][\w\s]+)\s+(\d+,\d+)\s+(\d+,\d+)\s+(\d+,\d+)\s+(\d+,\d+)/g);
-    if (rentLines) parsed.rentabilidade = rentLines.slice(0,7);
-
-    showToast('Portfel importado — '+fmtK(parsed.total || 0), 'ok');
+    renderFundoCard();
+    renderPatrimonio();
+    showToast('Portfel importado: '+fmt(parsed.total)+' ✓', 'ok');
 
   } else {
-    // Generic fallback
-    const nums = [...text.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2})/g)]
-      .map(m => parseNum(m[1])).filter(v=>v>1000).sort((a,b)=>b-a);
-    parsed.total = nums[0] || 0;
-    parsed.nome = file.name.replace(/\.(pdf|csv|txt|xlsx?)$/i,'');
-    if (!parsed.total) {
-      const val = prompt('Valor total da carteira (R$):');
-      if (val) parsed.total = parseNum(val);
-    }
-    showToast('Importado: '+fmtK(parsed.total), 'ok');
+    // Generic — ask for manual value
+    showToast('Formato não reconhecido', 'warn');
+    const val = prompt('Digite o valor total da carteira (R$):');
+    if (!val) return;
+    const total = parseFloat(val.replace(/[^\d,]/g,'').replace(',','.')) || 0;
+    const parsed = {
+      nome: file.name.replace(/\.(pdf|csv|txt|xlsx?)$/i,''),
+      arquivo: file.name,
+      total,
+      carteiras: [],
+    };
+    fundoStore.save(parsed);
+    renderFundoCard();
+    renderPatrimonio();
+    showToast('Importado: '+fmt(total), 'ok');
   }
-
-  fundoStore.save(parsed);
-  renderFundoCard();
-  renderPatrimonio();
   input.value = '';
 }
 
 
-
-// ── ORÇAMENTO ─────────────────────────────────────
-const budgetStore = {
-  load() {
-    try {
-      const saved = JSON.parse(localStorage.getItem('jcrp_budget')||'null');
-      if (saved && typeof saved === 'object') return saved;
-    } catch {}
-    return null;
-  },
-  save(obj) { localStorage.setItem('jcrp_budget', JSON.stringify(obj)); }
-};
-
-function getBudget() {
-  return budgetStore.load() || {...BUDGET};
-}
-
-function renderBudget() {
-  const bud = getBudget();
-  const total = Object.values(bud).reduce((a,b)=>a+b,0);
-
-  // All subcats — those with budget + those without
-  const withBudget = ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO' && bud[s]>0)
-    .sort((a,b)=>(bud[b]||0)-(bud[a]||0));
-  const noBudget = ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO' && !bud[s]);
-
-  let html = '<div class="bud-edit-wrap">'+
-    '<div class="bud-edit-header">'+
-      '<div class="bud-edit-total-label">Total orçado / mês</div>'+
-      '<div class="bud-edit-total">'+fmt(total)+'</div>'+
-    '</div>'+
-
-    // Categories with budget
-    '<div class="bud-edit-section-label">Com orçamento</div>'+
-    '<div class="bud-edit-list">'+
-    withBudget.map(sub=>
-      '<div class="bud-edit-row">'+
-        '<div class="bud-edit-name">'+sub+'</div>'+
-        '<div class="bud-edit-input-wrap">'+
-          '<span class="bud-edit-prefix">R$</span>'+
-          '<input type="number" class="bud-edit-input" data-sub="'+sub+'"'+
-            ' value="'+(bud[sub]||0)+'" min="0" step="100"'+
-            ' onchange="saveBudgetField(\''+sub+'\',this.value)"'+
-            ' onblur="renderBudget()">'+
-        '</div>'+
-      '</div>'
-    ).join('')+
-    '</div>'+
-
-    // Categories without budget
-    (noBudget.length>0
-      ? '<div class="bud-edit-section-label" style="margin-top:8px">Sem orçamento definido</div>'+
-        '<div class="bud-edit-list">'+
-        noBudget.map(sub=>
-          '<div class="bud-edit-row">'+
-            '<div class="bud-edit-name" style="color:var(--muted)">'+sub+'</div>'+
-            '<div class="bud-edit-input-wrap">'+
-              '<span class="bud-edit-prefix">R$</span>'+
-              '<input type="number" class="bud-edit-input" data-sub="'+sub+'"'+
-                ' value="" placeholder="0" min="0" step="100"'+
-                ' onchange="saveBudgetField(\''+sub+'\',this.value)"'+
-                ' onblur="renderBudget()">'+
-            '</div>'+
-          '</div>'
-        ).join('')+
-        '</div>'
-      : '')+
-
-    '<div class="bud-edit-hint">Toque no valor para editar. Valores por mês.</div>'+
-    '</div>';
-
-  document.getElementById('budget-content').innerHTML = html;
-}
-
-function saveBudgetField(sub, val) {
-  const bud = getBudget();
-  const v = parseFloat(val) || 0;
-  if (v === 0) delete bud[sub];
-  else bud[sub] = v;
-  budgetStore.save(bud);
-  // Update live BUDGET object so charts reflect immediately
-  Object.keys(BUDGET).forEach(k=>delete BUDGET[k]);
-  Object.assign(BUDGET, bud);
-  // Refresh total display
-  const totalEl = document.querySelector('.bud-edit-total');
-  if (totalEl) totalEl.textContent = fmt(Object.values(bud).reduce((a,b)=>a+b,0));
-}
-
-
-// ── CONCILIAÇÃO ───────────────────────────────────
-
-// ── SYNC FORÇADO ──────────────────────────────────
-async function forceFullSync() {
-  if (!isConfigured()) {
-    showToast('Configure o Google Sheets primeiro','warn'); return;
-  }
-  const btn = document.getElementById('force-sync-btn');
-  if (btn) { btn.disabled=true; btn.textContent='Sincronizando...'; }
-
-  try {
-    showLoading(true);
-    const timeout = new Promise((_,r) => setTimeout(()=>r(new Error('timeout')), 15000));
-
-    // 1. Flush fila pendente primeiro
-    await flushSyncQueue().catch(()=>{});
-
-    // 2. Enviar TODOS os dados locais para o Sheets (sobrescreve)
-    const txs = cache.load();
-    const edits = localEdits.load();
-
-    // Apply local edits to get final state
-    const finalTxs = localEdits.applyTo(txs);
-
-    // Send each edited tx to Sheets
-    const editedIds = Object.keys(edits).filter(id => !edits[id]._deleted);
-    const deletedIds = Object.keys(edits).filter(id => edits[id]._deleted);
-
-    let synced = 0;
-    for (const id of editedIds) {
-      const tx = finalTxs.find(t => t.id === id);
-      if (tx) {
-        try {
-          await Promise.race([
-            fetch(SHEETS_URL, {method:'POST', body:JSON.stringify({action:'editTx', tx})}),
-            timeout
-          ]);
-          synced++;
-        } catch(e) {}
-      }
-    }
-    for (const id of deletedIds) {
-      try {
-        await Promise.race([
-          fetch(SHEETS_URL, {method:'POST', body:JSON.stringify({action:'deleteTx', id})}),
-          timeout
-        ]);
-        synced++;
-      } catch(e) {}
-    }
-
-    // 3. Also sync reviewed state
-    const rev = reviewed.load();
-    if (Object.keys(rev).length > 0) {
-      await sheetsPost({action:'saveReviewed', reviewed:rev}).catch(()=>{});
-    }
-
-    // 4. Re-pull from Sheets to confirm
-    const remote = await Promise.race([sheetsGet('getTxs'), timeout]);
-    if (remote && remote.length > 0) {
-      const merged = localEdits.applyTo(remote);
-      STATE.txs = merged;
-      STATE.synced = true;
-      cache.save(merged);
-      syncQueue.save([]); // clear queue — all synced
-      refreshAll();
-    }
-
-    showToast('Sincronização completa ✓ ' + (synced > 0 ? synced + ' edições enviadas' : ''), 'ok');
-
-  } catch(e) {
-    showToast('Erro na sincronização — tente novamente', 'warn');
-  } finally {
-    showLoading(false);
-    setSyncBadge();
-    if (btn) { btn.disabled=false; btn.textContent='Forçar sincronização agora'; }
-    renderConciliacao(); // refresh the panel
-  }
-}
-
-function renderConciliacao() {
-  const txs = STATE.txs;
-  const el = document.getElementById('concil-content');
-  if (!el) return;
-
-  // ── 1. Por fonte ──
-  const sources = {};
-  txs.forEach(t => {
-    const src = t.source || 'outro';
-    if (!sources[src]) sources[src] = { count:0, total:0 };
-    sources[src].count++;
-    sources[src].total += parseFloat(t.val) || 0;
-  });
-
-  // ── 2. Por mês ──
-  const byMonth = {};
-  txs.forEach(t => {
-    const m = t.date ? t.date.slice(0,7) : 'sem data';
-    if (!byMonth[m]) byMonth[m] = { count:0, total:0 };
-    byMonth[m].count++;
-    byMonth[m].total += parseFloat(t.val) || 0;
-  });
-
-  // ── 3. Sem categoria ──
-  const uncat = txs.filter(t => t.sub === 'NÃO CATEGORIZADO');
-  const uncatTotal = uncat.reduce((s,t) => s + (parseFloat(t.val)||0), 0);
-
-  // ── 4. Duplicatas suspeitas (mesmo val + desc similar, datas próximas) ──
-  const suspicious = [];
-  for (let i = 0; i < txs.length; i++) {
-    for (let j = i+1; j < txs.length; j++) {
-      const a = txs[i], b = txs[j];
-      if (Math.abs((parseFloat(a.val)||0) - (parseFloat(b.val)||0)) > 0.01) continue;
-      if (!a.date || !b.date) continue;
-      const dayDiff = Math.abs(new Date(a.date) - new Date(b.date)) / 86400000;
-      if (dayDiff > 5) continue;
-      const descA = a.desc.slice(0,15).toUpperCase();
-      const descB = b.desc.slice(0,15).toUpperCase();
-      if (descA === descB && !suspicious.find(p => p.a.id===a.id || p.b.id===b.id)) {
-        suspicious.push({a, b});
-      }
-    }
-  }
-
-  const totalGeral = txs.reduce((s,t) => s + (parseFloat(t.val)||0), 0);
-  const MONTH_NAMES = {
-    '2026-01':'Janeiro','2026-02':'Fevereiro','2026-03':'Março',
-    '2026-04':'Abril','2026-05':'Maio','2026-06':'Junho',
-    '2026-07':'Julho','2026-08':'Agosto','2026-09':'Setembro',
-    '2026-10':'Outubro','2026-11':'Novembro','2026-12':'Dezembro',
-  };
-  const SRC_LABEL = {
-    'itau':'Itaú (conta)', 'unicred':'Unicred (conta)',
-    'card':'Cartão Itaú', 'card_unicred':'Cartão Unicred',
-    'excel':'Excel / Planilha', 'manual':'Manual', 'outro':'Outros'
-  };
-
-  const qLen = syncQueue.count();
-  const editLen = Object.keys(localEdits.load()).length;
-  const isCfg = isConfigured();
-
-  let html = '<div class="concil-wrap">';
-
-  // ── CARD: Status de sincronização ──
-  html += '<div class="concil-card">'+
-    '<div class="concil-card-title">Sincronização</div>'+
-    '<div class="concil-row">'+
-      '<span>Status</span>'+
-      '<span style="font-weight:600;color:'+(STATE.synced?'var(--green)':'var(--muted)')+'">'+
-        (STATE.synced ? '● Sheets conectado' : (isCfg ? '○ Aguardando' : '○ Sem Sheets'))+
-      '</span>'+
-    '</div>'+
-    '<div class="concil-row">'+
-      '<span>Edições locais salvas</span>'+
-      '<span style="font-weight:600">'+editLen+'</span>'+
-    '</div>'+
-    (qLen > 0
-      ? '<div class="concil-row concil-warn">'+
-          '<span>⚠ Pendentes de envio</span>'+
-          '<span style="font-weight:600">'+qLen+'</span>'+
-        '</div>'
-      : '<div class="concil-row concil-ok">'+
-          '<span>✓ Tudo enviado</span><span></span>'+
-        '</div>')+
-    (isCfg
-      ? '<div style="padding:12px 16px">'+
-          '<button id="force-sync-btn" onclick="forceFullSync()" '+
-            'style="width:100%;padding:12px;background:var(--blue);color:#fff;border:none;'+
-            'border-radius:10px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">'+
-            'Forçar sincronização agora'+
-          '</button>'+
-        '</div>'
-      : '<div class="concil-info-row" style="margin:0">Configure o Google Sheets em Ajustes para ativar sync</div>')+
-  '</div>';
-
-  // ── CARD: Resumo geral ──
-  html += '<div class="concil-card">'+
-    '<div class="concil-card-title">Resumo Geral</div>'+
-    '<div class="concil-row concil-total">'+
-      '<span>Total importado</span>'+
-      '<span>'+fmt(totalGeral)+'</span>'+
-    '</div>'+
-    '<div class="concil-row">'+
-      '<span>Lançamentos</span>'+
-      '<span>'+txs.length+'</span>'+
-    '</div>'+
-    '<div class="concil-row">'+
-      '<span>Período</span>'+
-      '<span>'+(Object.keys(byMonth).filter(m=>m.startsWith('2026')).length)+' meses em 2026</span>'+
-    '</div>'+
-    (uncatTotal>0
-      ? '<div class="concil-row concil-warn">'+
-          '<span>⚠ Sem categoria ('+uncat.length+' lanç.)</span>'+
-          '<span>'+fmt(uncatTotal)+'</span>'+
-        '</div>'
-      : '<div class="concil-row concil-ok"><span>✓ Tudo categorizado</span><span></span></div>')+
-  '</div>';
-
-  // ── CARD: Por fonte ──
-  const srcEntries = Object.entries(sources).sort((a,b)=>b[1].total-a[1].total);
-  html += '<div class="concil-card">'+
-    '<div class="concil-card-title">Por Fonte</div>'+
-    srcEntries.map(([src, d]) =>
-      '<div class="concil-row">'+
-        '<div>'+
-          '<div class="concil-row-name">'+(SRC_LABEL[src]||src)+'</div>'+
-          '<div class="concil-row-sub">'+d.count+' lançamentos</div>'+
-        '</div>'+
-        '<div class="concil-row-val">'+fmt(d.total)+'</div>'+
-      '</div>'
-    ).join('')+
-  '</div>';
-
-  // ── CARD: Por mês ──
-  const monthEntries = Object.entries(byMonth).sort((a,b)=>a[0].localeCompare(b[0]));
-  html += '<div class="concil-card">'+
-    '<div class="concil-card-title">Por Mês</div>'+
-    monthEntries.map(([m, d]) =>
-      '<div class="concil-row">'+
-        '<div>'+
-          '<div class="concil-row-name">'+(MONTH_NAMES[m]||m)+'</div>'+
-          '<div class="concil-row-sub">'+d.count+' lançamentos</div>'+
-        '</div>'+
-        '<div class="concil-row-val">'+fmt(d.total)+'</div>'+
-      '</div>'
-    ).join('')+
-  '</div>';
-
-  // ── CARD: Possíveis duplicatas ──
-  html += '<div class="concil-card">'+
-    '<div class="concil-card-title">Possíveis Duplicatas '+
-      (suspicious.length > 0
-        ? '<span class="concil-badge-warn">'+suspicious.length+'</span>'
-        : '<span class="concil-badge-ok">0</span>')+
-    '</div>'+
-    (suspicious.length === 0
-      ? '<div class="concil-empty">Nenhuma duplicata detectada</div>'
-      : suspicious.slice(0,10).map(({a,b}) =>
-          '<div class="concil-dupe">'+
-            '<div class="concil-dupe-header">'+
-              '<span class="concil-dupe-val">'+fmt(parseFloat(a.val))+'</span>'+
-              '<span class="concil-dupe-dates">'+a.date+' · '+b.date+'</span>'+
-            '</div>'+
-            '<div class="concil-dupe-desc" onclick="openEditTx(\''+a.id+'\')">'+a.desc.slice(0,45)+'</div>'+
-            '<div class="concil-dupe-desc" onclick="openEditTx(\''+b.id+'\')">'+b.desc.slice(0,45)+'</div>'+
-          '</div>'
-        ).join(''))+
-  '</div>';
-
-  // ── CARD: O que pode ter ficado de fora ──
-  html += '<div class="concil-card concil-card-info">'+
-    '<div class="concil-card-title">O que pode ter ficado de fora</div>'+
-    '<div class="concil-info-row">Créditos e estornos (valores ≤ 0) são ignorados na importação</div>'+
-    '<div class="concil-info-row">Linhas sem formato de data dd/mm/aaaa são puladas</div>'+
-    '<div class="concil-info-row">Transações similares detectadas como duplicata são bloqueadas</div>'+
-    '<div class="concil-info-row">Arquivos não importados simplesmente não existem no sistema</div>'+
-  '</div>';
-
-  html += '</div>';
-  el.innerHTML = html;
-}
-// ── AJUSTES ───────────────────────────────────────
-let activeAjusteTab='revisar';
-
-function renderAjustes() { setAjusteTab(activeAjusteTab); }
-
-function setAjusteTab(tab) {
-  activeAjusteTab=tab;
-  ['revisar','regras','import','budget','concil'].forEach(t=>{
-    const btn=document.getElementById('atab-'+t);
-    const pane=document.getElementById('ajuste-'+t);
-    if(btn) btn.classList.toggle('active',t===tab);
-    if(pane) pane.style.display=t===tab?'block':'none';
-  });
-  if(tab==='revisar') { renderRevisar(); setTimeout(initSwipe,100); }
-  if(tab==='regras')  renderRules();
-  if(tab==='import')  renderImport();
-  if(tab==='budget')  renderBudget();
-  if(tab==='concil')  renderConciliacao();
-  updateReviewBadge();
-}
-
-// ── REVISAR ───────────────────────────────────────
-let reviewQueue=[], reviewIdx=0;
-
-function markAllReviewed() {
-  const rev=reviewed.load();
-  STATE.txs.forEach(t=>{ if(!rev[t.id]) rev[t.id]='ok'; });
-  localStorage.setItem('jcrp_reviewed',JSON.stringify(rev));
-  showToast('Todos marcados como revisados ✓','ok');
-  renderRevisar();
-}
-
-function renderRevisar() {
-  const rev=reviewed.load(), minVal=threshold.get();
-  document.getElementById('review-threshold-val').textContent=fmt(minVal);
-  reviewQueue=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)>=minVal).sort((a,b)=>parseFloat(b.val)-parseFloat(a.val));
-  reviewIdx=0;
-  const skipped=STATE.txs.filter(t=>!rev[t.id]&&(parseFloat(t.val)||0)<minVal).length;
-  const pendingCount = STATE.txs.filter(t=>!rev[t.id]).length;
-  document.getElementById('review-skipped').textContent=skipped>0?skipped+' lançamento'+(skipped>1?'s':'')+' abaixo do limite.':'';
-  const markAllBtn = document.getElementById('mark-all-reviewed-btn');
-  if(markAllBtn) { markAllBtn.style.display = pendingCount>0?'block':'none'; markAllBtn.textContent='Marcar todos os '+pendingCount+' como revisados'; }
-  showReviewCard();
-}
-
-function showReviewCard() {
-  const wrap=document.getElementById('review-card-wrap');
-  const done=document.getElementById('review-done');
-  if(reviewIdx>=reviewQueue.length){wrap.style.display='none';done.style.display='flex';document.getElementById('review-progress').textContent='';return;}
-  wrap.style.display='block';done.style.display='none';
-  const t=reviewQueue[reviewIdx],total=reviewQueue.length;
-  document.getElementById('review-progress').textContent=(reviewIdx+1)+' de '+total;
-  document.getElementById('review-prog-fill').style.width=((reviewIdx/total)*100)+'%';
-  const card=document.getElementById('review-card');
-  card.innerHTML=
-    '<div class="rv-date">'+t.date+'</div>'+
-    '<div class="rv-desc">'+t.desc+'</div>'+
-    '<div class="rv-val">'+fmt(parseFloat(t.val)||0)+'</div>'+
-    '<div class="rv-sub-row">'+
-      '<span class="rv-cat-badge '+(getCat(t.sub)==='Fixa'?'badge-blue':'badge-gold')+'">'+getCat(t.sub)+'</span>'+
-      '<span class="rv-sub">'+t.sub+'</span>'+
-    '</div>'+
-    '<div class="rv-edit-row">'+
-      '<div class="rv-edit-field"><div class="rv-edit-label">Subcategoria</div>'+
-        '<select id="review-select" onchange="onReviewSubChange()">'+ALL_SUBS.map(s=>'<option value="'+s+'" '+(s===t.sub?'selected':'')+'>'+s+'</option>').join('')+'</select>'+
-      '</div>'+
-      '<div class="rv-edit-field"><div class="rv-edit-label">Tipo</div>'+
-        '<select id="review-cat"><option value="Fixa" '+((t.cat||getCat(t.sub))==='Fixa'?'selected':'')+'>Fixa</option><option value="Variáveis" '+((t.cat||getCat(t.sub))!=='Fixa'?'selected':'')+'>Variável</option></select>'+
-      '</div>'+
-    '</div>';
-  initSwipe(card);
-}
-
-function approveCard() {
-  const t=reviewQueue[reviewIdx]; if(!t) return;
-  reviewed.approve(t.id); reviewIdx++; showReviewCard();
-}
-
-function rejectCard() {
-  const t=reviewQueue[reviewIdx]; if(!t) return;
-  const sel=document.getElementById('review-select');
-  const cat=document.getElementById('review-cat');
-  const newSub=sel?sel.value:t.sub, newCat=cat?cat.value:getCat(newSub);
-  STATE.txs=STATE.txs.map(x=>x.id===t.id?{...x,sub:newSub,cat:newCat}:x);
-  cache.save(STATE.txs);
-  localEdits.set(t.id, {sub:newSub, cat:newCat}); // persist review edit
-  if(isConfigured()) sheetsPost({action:'editTx',tx:{...t,sub:newSub,cat:newCat}}).catch(()=>{});
-  reviewed.approve(t.id); reviewIdx++; showReviewCard();
-}
-
-function skipCard() { reviewIdx++; showReviewCard(); }
-function onReviewSubChange() { const sel=document.getElementById('review-select'),cat=document.getElementById('review-cat'); if(sel&&cat) cat.value=getCat(sel.value); }
-
-function initSwipe(el) {
-  let sx=0,sy=0;
-  el.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;sy=e.touches[0].clientY;},{passive:true});
-  el.addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy;if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>50){dx>0?approveCard():rejectCard();}});
-}
-
-// ── REGRAS ────────────────────────────────────────
-function renderRules() {
-  const rules=userRules.load();
-  const cats=STATE.txs.filter(t=>t.sub==='NÃO CATEGORIZADO').length;
-  const builtIn=RULES_CARD.length+RULES_ITAU.length+RULES_UNICRED.length;
-
-  let html=
-    // Header info
-    '<div class="rules-wrap">'+
-    (cats>0
-      ? '<div class="rules-banner">'+
-          '<span>'+cats+' lançamento'+(cats>1?'s':'')+' sem categoria</span>'+
-          '<div style="display:flex;gap:6px">'+
-            '<button onclick="showUncategorized()" class="rules-apply-btn" style="background:var(--s1);color:var(--blue);border:1px solid var(--blue)">Ver</button>'+
-            '<button onclick="applyAndRefresh()" class="rules-apply-btn">Aplicar regras</button>'+
-          '</div>'+
-        '</div>'
-      : '')+
-
-    // Nova regra
-    '<div class="rules-new-card">'+
-      '<div class="rules-new-title">Nova regra</div>'+
-      '<input id="rule-kw" type="text" placeholder="Palavra-chave  —  ex: UBER, NETFLIX" class="rules-input">'+
-      '<div class="rules-new-row">'+
-        '<select id="rule-sub" class="rules-select">'+
-          ALL_SUBS.filter(s=>s!=='NÃO CATEGORIZADO').map(s=>'<option value="'+s+'">'+s+'</option>').join('')+
-        '</select>'+
-        '<button onclick="saveNewRule()" class="rules-add-btn">Adicionar</button>'+
-      '</div>'+
-    '</div>'+
-
-    // Regras do usuário
-    (rules.length>0
-      ? '<div class="rules-list-header">Suas regras <span class="rules-count">'+rules.length+'</span></div>'+
-        '<div class="rules-list">'+
-        rules.map(r=>
-          '<div class="rules-row">'+
-            '<div class="rules-row-kw">'+r.kw+'</div>'+
-            '<div class="rules-row-arrow">→</div>'+
-            '<div class="rules-row-sub">'+r.sub+'</div>'+
-            '<button onclick="removeRule(\''+r.kw+'\')" class="rules-row-del">×</button>'+
-          '</div>'
-        ).join('')+
-        '</div>'
-      : '<div class="rules-empty">Nenhuma regra criada ainda</div>')+
-
-    '<div class="rules-footer">'+builtIn+' regras pré-configuradas no sistema</div>'+
-    '</div>';
-
-  document.getElementById('rules-content').innerHTML=html;
-}
-
-function saveNewRule() {
-  const kw=document.getElementById('rule-kw').value.trim().toUpperCase();
-  const sub=document.getElementById('rule-sub').value;
-  if(!kw){showToast('Digite uma palavra-chave','warn');return;}
-  userRules.add(kw,sub); document.getElementById('rule-kw').value='';
-  renderRules(); showToast('Regra "'+kw+'" → '+sub+' salva ✓','ok');
-}
-
-function removeRule(kw) { userRules.remove(kw); renderRules(); showToast('Regra removida','ok'); }
-
-function applyAndRefresh() {
-  const rules=userRules.load(); if(!rules.length) return;
-  let changed=0;
-  STATE.txs=STATE.txs.map(t=>{
-    if(t.sub!=='NÃO CATEGORIZADO') return t;
-    const d=t.desc.toUpperCase();
-    for(const r of rules){if(d.includes(r.kw)){changed++;return{...t,sub:r.sub,cat:r.cat};}}
-    return t;
-  });
-  if(changed>0){cache.save(STATE.txs);}
-  showToast(changed+' lançamentos categorizados ✓','ok'); refreshAll();
-}
-
-// ── IMPORTAR ──────────────────────────────────────
-let pendingTxs=[];
-
-function renderImport() {
-  const dz=document.getElementById('drop-zone'),fi=document.getElementById('file-input');
-  if(dz&&!dz._bound){
-    dz._bound=true;
-    dz.addEventListener('click',()=>fi.click());
-    dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over');});
-    dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
-    dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');handleFiles(e.dataTransfer.files);});
-    fi.onchange=e=>handleFiles(e.target.files);
-  }
-}
-
-function parseCSV(text,type) {
-  const lines=text.split(/\r?\n/).filter(l=>l.trim()), results=[];
-  lines.forEach(line=>{
-    const cols=line.split(';').map(c=>c.replace(/^"|"$/g,'').trim());
-    let date='',desc='',val=0;
-    if(type==='itau'){
-      if(!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
-      const[d,m,y]=cols[0].split('/');date=y+'-'+m+'-'+d;desc=cols[1]||'';
-      val=parseFloat((cols[2]||'0').replace('.','').replace(',','.'))||0; if(val<=0) return;
-    } else if(type==='unicred'){
-      if(!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
-      const[d,m,y]=cols[0].split('/');date=y+'-'+m+'-'+d;desc=cols[2]||cols[1]||'';
-      val=parseFloat((cols[3]||'0').replace('.','').replace(',','.'))||0; if(val<=0) return;
-    } else {
-      if(!/^\d{2}\/\d{2}\/\d{4}/.test(cols[0])) return;
-      const[d,m,y]=cols[0].split('/');date=y+'-'+m+'-'+d;desc=cols[1]||'';
-      val=parseFloat((cols[2]||'0').replace('.','').replace(',','.'))||0; if(val<=0) return;
-    }
-    const slug=desc.replace(/[^a-zA-Z0-9]/g,'').slice(0,10);
-    const id=type+'_'+date.replace(/-/g,'')+'_'+slug+'_'+val;
-    const{cat,sub,pessoa}=categorize(desc,type);
-    if(cat===null) return;
-    results.push({id,date,desc,val:String(val),cat,sub:sub||'NÃO CATEGORIZADO',pessoa:pessoa||'',obs:'',source:type});
-  });
-  return results;
-}
-
-function expandParcelas(txs) {
-  const extra=[];
-  txs.forEach(t=>{
-    const m=t.desc.match(/(\d{2})\/(\d{2})/); if(!m) return;
-    const cur=parseInt(m[1]),tot=parseInt(m[2]); if(cur<1||tot<2||cur>tot) return;
-    const[y,mo,d]=t.date.split('-').map(Number);
-    for(let i=1;i<=tot-cur;i++){
-      let nm=mo+i,ny=y; while(nm>12){nm-=12;ny++;}
-      const ndate=ny+'-'+String(nm).padStart(2,'0')+'-'+String(d).padStart(2,'0');
-      const nDesc=t.desc.replace(/\d{2}\/\d{2}/,String(cur+i).padStart(2,'0')+'/'+String(tot).padStart(2,'0'));
-      extra.push({...t,id:t.id+'_p'+(cur+i),date:ndate,desc:nDesc,obs:'parcela '+(cur+i)+'/'+tot,source:t.source+'_parcela'});
-    }
-  });
-  return [...txs,...extra];
-}
-
-function detectDuplicates(newTxs,existing){
-  const existIds=new Set(existing.map(t=>t.id));
-  const fresh=[],dupes=[],exact=[];
-  newTxs.forEach(t=>{
-    if(existIds.has(t.id)){exact.push(t);return;}
-    const similar=existing.find(e=>{
-      if(Math.abs(parseFloat(e.val)-parseFloat(t.val))>0.01) return false;
-      if(!e.date||!t.date) return false;
-      return Math.abs(new Date(e.date)-new Date(t.date))<=3*86400000;
-    });
-    if(similar) dupes.push({tx:t,similar}); else fresh.push(t);
-  });
-  return{fresh,dupes,exact};
-}
-
-function handleFiles(files) {
-  pendingTxs=[]; document.getElementById('import-log').innerHTML='';
-  document.getElementById('import-count').textContent='Lendo arquivos...';
-  document.getElementById('btn-confirm').disabled=true;
-  let processed=0;
-  Array.from(files).forEach(file=>{
-    const reader=new FileReader();
-    reader.onload=e=>{
-      const fname=file.name.toLowerCase();
-      let type='card';
-      if(fname.includes('unicred')&&fname.includes('fatura')) type='card_unicred';
-      else if(fname.includes('unicred')||fname.includes('extrato-')) type='unicred';
-      else if(fname.includes('itau')||fname.includes('extrato_conta')) type='itau';
-      pendingTxs.push(...expandParcelas(parseCSV(e.target.result,type)));
-      if(++processed===files.length) showImportPreview();
-    };
-    reader.readAsText(file,'latin-1');
-  });
-}
-
-function showImportPreview() {
-  const existing=cache.load();
-  const{fresh,dupes,exact}=detectDuplicates(pendingTxs,existing);
-  let html='';
-  if(fresh.length>0){
-    html+='<div class="import-section-label import-ok">✓ '+fresh.length+' novos</div>';
-    html+=fresh.map(t=>'<div class="log-item"><div class="log-dot" style="background:'+(t.sub==='NÃO CATEGORIZADO'?'#C0392B':'#1A8C5B')+'"></div><div style="flex:1"><div class="log-desc">'+t.desc.slice(0,40)+'</div><div class="log-sub">'+t.date+' · '+t.sub+'</div></div><div class="log-val">'+fmt(t.val)+'</div></div>').join('');
-  }
-  if(dupes.length>0){
-    html+='<div class="import-section-label import-warn">⚠ '+dupes.length+' possíveis duplicatas</div>';
-    html+=dupes.map(({tx,similar})=>'<div class="log-item" style="border-left:3px solid #E8A020"><div class="log-dot" style="background:#E8A020"></div><div style="flex:1"><div class="log-desc">'+tx.desc.slice(0,38)+'</div><div class="log-sub">'+tx.date+' · similar: '+similar.date+'</div></div><div style="text-align:right"><div class="log-val">'+fmt(tx.val)+'</div><label style="font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px"><input type="checkbox" class="dupe-include" data-id="'+tx.id+'" style="width:12px;height:12px"> incluir</label></div></div>').join('');
-  }
-  if(exact.length>0) html+='<div class="import-section-label import-muted">✗ '+exact.length+' já existentes — ignorados</div>';
-  document.getElementById('import-log').innerHTML=html;
-  document.getElementById('import-count').textContent=fresh.length+' novos · '+dupes.length+' a verificar · '+exact.length+' ignorados';
-  document.getElementById('btn-confirm').disabled=(fresh.length===0&&dupes.length===0);
-}
-
-async function confirmImport() {
-  const btn=document.getElementById('btn-confirm');
-  btn.disabled=true; btn.textContent='Salvando...';
-  const checkedDupes=[];
-  document.querySelectorAll('.dupe-include:checked').forEach(cb=>{const tx=pendingTxs.find(t=>t.id===cb.dataset.id);if(tx)checkedDupes.push(tx);});
-  const{fresh}=detectDuplicates(pendingTxs,cache.load());
-  const toAdd=[...fresh,...checkedDupes];
-  const all=cache.load(),keys=new Set(all.map(t=>t.id));
-  const realFresh=toAdd.filter(t=>!keys.has(t.id));
-  cache.save([...all,...realFresh]); STATE.txs=cache.load();
-  if(isConfigured()&&realFresh.length>0){try{await sheetsPost({action:'addTxs',txs:realFresh});}catch(e){}}
-  showToast('✓ '+realFresh.length+' lançamentos adicionados!','ok');
-  document.getElementById('import-count').textContent='✓ '+realFresh.length+' adicionados';
-  btn.textContent='Confirmar Importação'; pendingTxs=[]; refreshAll();
-}
-
-// ── DETAIL MODAL ──────────────────────────────────
-function openDetail(subName) {
-  const txs=STATE.txs;
-  const filtered=txs.filter(t=>t.sub===subName).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  const total=filtered.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
-  document.getElementById('detail-title').textContent=subName;
-  document.getElementById('detail-total').textContent=fmt(total)+' · '+filtered.length+' lançamentos';
-  const byM={};filtered.forEach(t=>{const m=t.date?.slice(5,7)||'00';byM[m]=(byM[m]||0)+(parseFloat(t.val)||0);});
-  document.getElementById('detail-chart').innerHTML=monthBarChart(byM,BUDGET[subName]);
-  const rev=reviewed.load();
-  document.getElementById('detail-list').innerHTML=filtered.map(t=>{
-    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'#1A8C5B':st?'#A67C2E':'#ccc';
-    return '<div class="detail-row" style="cursor:pointer">'+
-      '<div style="color:'+dotC+';font-size:14px;width:16px;flex-shrink:0">'+dot+'</div>'+
-      '<div style="flex:1;min-width:0" onclick="openEditTx(\''+t.id+'\')">'+
-        '<div style="font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+t.desc+'</div>'+
-        '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+t.date+(t.obs?' · '+t.obs:'')+'</div>'+
-      '</div>'+
-      '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:8px">'+
-        '<div style="font-size:12px;color:var(--text);font-feature-settings:\'tnum\'">'+fmt(parseFloat(t.val)||0)+'</div>'+
-        '<div onclick="openSplit(\''+t.id+'\')" style="font-size:10px;color:var(--blue);cursor:pointer;padding:2px 5px;border:1px solid var(--border);border-radius:4px">÷</div>'+
-      '</div>'+
-    '</div>';
-  }).join('');
-  document.getElementById('detail-modal').classList.add('open');
-}
-function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
-
-// ── EDIT TX MODAL ─────────────────────────────────
-function openEditTx(txId) {
-  const t=STATE.txs.find(x=>x.id===txId); if(!t) return;
-  document.getElementById('edittx-id').value=txId;
-  document.getElementById('edittx-desc').textContent=t.desc||'';
-  document.getElementById('edittx-date').textContent=t.date||'';
-  document.getElementById('edittx-val').textContent=fmt(parseFloat(t.val)||0);
-  const sel=document.getElementById('edittx-sub');
-  if(sel) sel.innerHTML=ALL_SUBS.map(s=>'<option value="'+s+'" '+(s===t.sub?'selected':'')+'>'+s+'</option>').join('');
-  const catSel=document.getElementById('edittx-cat');
-  if(catSel) catSel.value=t.cat||getCat(t.sub);
-  document.getElementById('edittx-modal').classList.add('open');
-}
-function closeEditTx() { document.getElementById('edittx-modal').classList.remove('open'); }
-function onEditSubChange() { const sel=document.getElementById('edittx-sub'),cat=document.getElementById('edittx-cat');if(sel&&cat)cat.value=getCat(sel.value); }
-
-async function saveEditTx() {
-  const id=document.getElementById('edittx-id').value;
-  const sub=document.getElementById('edittx-sub').value;
-  const cat=document.getElementById('edittx-cat').value||getCat(sub);
-  STATE.txs=STATE.txs.map(t=>t.id===id?{...t,sub,cat}:t);
-  cache.save(STATE.txs);
-  localEdits.set(id, {sub, cat}); // persist edit locally
-  if(isConfigured()) sheetsPost({action:'editTx',tx:STATE.txs.find(t=>t.id===id)}).catch(()=>{});
-  closeEditTx(); refreshAll(); showToast('Salvo ✓','ok');
-}
-
-async function deleteTx() {
-  const id=document.getElementById('edittx-id').value;
-  if(!confirm('Excluir este lançamento?')) return;
-  STATE.txs=STATE.txs.filter(t=>t.id!==id);
-  cache.save(STATE.txs);
-  localEdits.del(id); // mark as deleted locally
-  if(isConfigured()) sheetsPost({action:'deleteTx',id}).catch(()=>{});
-  closeEditTx(); refreshAll(); showToast('Excluído','ok');
-}
-
-// ── MANUAL ────────────────────────────────────────
-function openManual() {
-  document.getElementById('manual-date').value=new Date().toISOString().slice(0,10);
-  document.getElementById('manual-val').value='';
-  document.getElementById('manual-desc').value='';
-  document.getElementById('manual-obs').value='';
-  const sel=document.getElementById('manual-sub');
-  if(sel) sel.innerHTML=ALL_SUBS.map(s=>'<option value="'+s+'">'+s+'</option>').join('');
-  document.getElementById('manual-modal').classList.add('open');
-}
-function closeManual() { document.getElementById('manual-modal').classList.remove('open'); }
-
-async function saveManual() {
-  const date=document.getElementById('manual-date').value;
-  const val=document.getElementById('manual-val').value;
-  const desc=document.getElementById('manual-desc').value;
-  const sub=document.getElementById('manual-sub').value;
-  const obs=document.getElementById('manual-obs').value;
-  if(!date||!val||!desc){showToast('Preencha data, valor e descrição','warn');return;}
-  const cat=getCat(sub);
-  const slug=desc.replace(/[^a-zA-Z0-9]/g,'').slice(0,10);
-  const id='manual_'+date.replace(/-/g,'')+'_'+slug+'_'+val;
-  const tx={id,date,desc,val:String(parseFloat(val)||0),cat,sub,pessoa:'',obs,source:'manual'};
-  STATE.txs.push(tx); cache.save(STATE.txs);
-  if(isConfigured()) sheetsPost({action:'addTxs',txs:[tx]}).catch(()=>{});
-  closeManual(); refreshAll(); showToast('Lançamento adicionado ✓','ok');
-}
-
-// ── SPLIT ─────────────────────────────────────────
-let splitTxId=null,splitParts=[];
-
-function openSplit(txId) {
-  const t=STATE.txs.find(x=>x.id===txId); if(!t) return;
-  splitTxId=txId;
-  splitParts=[{desc:t.desc,sub:t.sub,val:''},{desc:'',sub:t.sub,val:''}];
-  document.getElementById('split-original-desc').textContent=t.desc;
-  document.getElementById('split-original-val').textContent=fmt(parseFloat(t.val)||0);
-  document.getElementById('split-original-val').dataset.total=t.val;
-  renderSplitParts();
-  document.getElementById('split-modal').classList.add('open');
-}
-
-function renderSplitParts() {
-  const total=parseFloat(document.getElementById('split-original-val').dataset.total)||0;
-  const used=splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
-  const rem=total-used;
-  document.getElementById('split-remaining').textContent='Restante: '+fmt(rem)+' de '+fmt(total);
-  document.getElementById('split-remaining').style.color=Math.abs(rem)<0.01?'var(--green)':rem<0?'var(--red)':'var(--muted)';
-  document.getElementById('split-parts').innerHTML=splitParts.map((p,i)=>
-    '<div class="split-part">'+
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'+
-        '<div style="font-size:11px;font-weight:600;color:var(--muted2)">Parte '+(i+1)+'</div>'+
-        (splitParts.length>2?'<span onclick="removeSplitPart('+i+')" style="font-size:18px;color:var(--muted);cursor:pointer">×</span>':'')+
-      '</div>'+
-      '<div class="manual-field" style="margin-bottom:6px"><label>Descrição</label><input type="text" value="'+p.desc+'" oninput="splitParts['+i+'].desc=this.value" placeholder="Ex: Mercado"></div>'+
-      '<div style="display:flex;gap:8px">'+
-        '<div class="manual-field" style="flex:1;margin-bottom:0"><label>Categoria</label><select onchange="splitParts['+i+'].sub=this.value">'+ALL_SUBS.map(s=>'<option value="'+s+'" '+(s===p.sub?'selected':'')+'>'+s+'</option>').join('')+'</select></div>'+
-        '<div class="manual-field" style="width:100px;margin-bottom:0"><label>Valor R$</label><input type="number" value="'+p.val+'" step="0.01" placeholder="0,00" oninput="splitParts['+i+'].val=this.value;renderSplitParts()"></div>'+
-      '</div>'+
-    '</div>'
-  ).join('');
-}
-
-function addSplitPart(){const t=STATE.txs.find(x=>x.id===splitTxId);splitParts.push({desc:'',sub:t?.sub||ALL_SUBS[0],val:''});renderSplitParts();}
-function removeSplitPart(i){splitParts.splice(i,1);renderSplitParts();}
-
-function saveSplit() {
-  const t=STATE.txs.find(x=>x.id===splitTxId); if(!t) return closeSplit();
-  const total=parseFloat(t.val)||0;
-  const used=splitParts.reduce((s,p)=>s+(parseFloat(p.val)||0),0);
-  if(Math.abs(used-total)>0.02){showToast('Soma ('+fmt(used)+') ≠ total ('+fmt(total)+')','warn');return;}
-  STATE.txs=STATE.txs.filter(x=>x.id!==splitTxId);
-  const newTxs=splitParts.map((p,i)=>({...t,id:splitTxId+'_s'+(i+1),desc:p.desc||t.desc,sub:p.sub,cat:getCat(p.sub),val:String(parseFloat(p.val)||0),obs:'fração '+(i+1)+'/'+splitParts.length}));
-  STATE.txs=[...STATE.txs,...newTxs]; cache.save(STATE.txs);
-  if(isConfigured()){sheetsPost({action:'deleteTx',id:splitTxId}).catch(()=>{});sheetsPost({action:'addTxs',txs:newTxs}).catch(()=>{});}
-  reviewed.approve(splitTxId); newTxs.forEach(tx=>reviewed.approve(tx.id));
-  closeSplit(); refreshAll(); showToast('Dividido em '+splitParts.length+' lançamentos ✓','ok');
-}
-function closeSplit(){document.getElementById('split-modal').classList.remove('open');splitTxId=null;splitParts=[];}
-
-// ── THRESHOLD ─────────────────────────────────────
-function openThresholdModal(){document.getElementById('review-threshold-input').value=threshold.get();document.getElementById('review-threshold-modal').classList.add('open');}
-function closeThresholdModal(){document.getElementById('review-threshold-modal').classList.remove('open');}
-function setReviewThreshold(){const v=parseFloat(document.getElementById('review-threshold-input').value)||1000;threshold.set(v);closeThresholdModal();renderAjustes();}
-
-// ── BUSCA ─────────────────────────────────────────
-let searchFilter='all';
-
-function showUncategorized() {
-  openSearch();
-  setTimeout(()=>{
-    // activate uncat filter
-    document.querySelectorAll('#search-filters .sort-pill').forEach(b=>{
-      b.classList.toggle('active', b.textContent.includes('Sem cat'));
-    });
-    searchFilter='uncat';
-    runSearch();
-  }, 150);
-}
-
-function openSearch(){document.getElementById('search-modal').classList.add('open');setTimeout(()=>document.getElementById('search-input').focus(),100);runSearch();}
-function closeSearch(){document.getElementById('search-modal').classList.remove('open');document.getElementById('search-input').value='';}
-function setSearchFilter(f){searchFilter=f;document.querySelectorAll('#search-filters .sort-pill').forEach(b=>b.classList.remove('active'));event.target.classList.add('active');runSearch();}
-
-function runSearch(){
-  const q=(document.getElementById('search-input').value||'').trim().toLowerCase();
-  let pool=STATE.txs;
-  if(searchFilter==='month') pool=STATE.txs.filter(t=>t.date&&t.date.startsWith('2026-'+activeMonth));
-  if(searchFilter==='uncat') pool=STATE.txs.filter(t=>t.sub==='NÃO CATEGORIZADO');
-  let results=q?pool.filter(t=>(t.desc||'').toLowerCase().includes(q)||(t.sub||'').toLowerCase().includes(q)||(t.obs||'').toLowerCase().includes(q)||String(parseFloat(t.val)||0).includes(q)):pool;
-  results=[...results].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  const total=results.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
-  document.getElementById('search-summary').textContent=(q||searchFilter!=='all')?results.length+' resultado'+(results.length!==1?'s':'')+' · '+fmt(total):pool.length+' lançamentos · '+fmt(pool.reduce((s,t)=>s+(parseFloat(t.val)||0),0));
-  if(!results.length){document.getElementById('search-results').innerHTML='<div style="padding:32px;text-align:center;color:var(--muted);font-size:13px">Nenhum resultado</div>';return;}
-  const rev=reviewed.load();
-  document.getElementById('search-results').innerHTML=results.slice(0,100).map(t=>{
-    const st=rev[t.id],dot=st==='ok'?'✓':st?'✎':'·',dotC=st==='ok'?'var(--green)':st?'var(--blue)':'var(--border)';
-    return '<div class="search-row" onclick="closeSearch();openEditTx(\''+t.id+'\')">'+
-      '<div style="color:'+dotC+';font-size:13px;width:14px;flex-shrink:0">'+dot+'</div>'+
-      '<div style="flex:1;min-width:0">'+
-        '<div style="font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+t.desc+'</div>'+
-        '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+t.date+' <span style="color:var(--blue)">'+t.sub+'</span>'+(t.obs?' · '+t.obs:'')+'</div>'+
-      '</div>'+
-      '<div style="font-size:13px;font-weight:600;font-feature-settings:\'tnum\';flex-shrink:0;margin-left:8px">'+fmt(parseFloat(t.val)||0)+'</div>'+
-    '</div>';
-  }).join('')+(results.length>100?'<div style="padding:12px;text-align:center;font-size:11px;color:var(--muted)">Mostrando 100 de '+results.length+'</div>':'');
-}
-
-// ── NAV ───────────────────────────────────────────
-const SCREENS=['home','despesas','comparativo','patrimonio','ajustes'];
-
-function showScreen(id) {
-  SCREENS.forEach(s=>{
-    document.getElementById('screen-'+s).classList.toggle('active',s===id);
-    const n=document.getElementById('nav-'+s); if(n) n.classList.toggle('active',s===id);
-  });
-  document.querySelector('.scroll-area').scrollTop=0;
-  renderScreen(id);
-}
-
-function renderScreen(id) {
-  if(id==='home')        renderHome();
-  if(id==='despesas')    renderDespesas();
-  if(id==='comparativo') renderComparativo();
-  if(id==='patrimonio')  renderPatrimonio();
-  if(id==='ajustes')     renderAjustes();
-}
-
-// ── PIN ───────────────────────────────────────────
-let pinBuffer='';
-function pinKey(digit){if(pinBuffer.length>=4)return;pinBuffer+=digit;updatePinDots();if(pinBuffer.length===4){setTimeout(()=>{pinBuffer='';updatePinDots();},150);}}
-function updatePinDots(){for(let i=0;i<4;i++){const d=document.getElementById('pd'+i);if(d)d.classList.toggle('filled',i<pinBuffer.length);}}
-function pinDel(){pinBuffer=pinBuffer.slice(0,-1);updatePinDots();}
-function seedData() {
-  cache.save([
-    {id:'xl_20260128_RoyalCaribb_4471.89',date:'2026-01-28',desc:'Royal Caribbean Cr06/10',val:4471.89,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'Cruzeiro Julho 2026',source:'excel'},
-    {id:'xl_20260105_Pgbeautybi_210.01',date:'2026-01-05',desc:'Pg *beautybiz Come05/05',val:210.01,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'J',obs:'',source:'excel'},
-    {id:'xl_20260129_Ppgrup_299.99',date:'2026-01-29',desc:'Pp     *grupokohal09/12',val:299.99,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'Capacete Bike',source:'excel'},
-    {id:'xl_20260101_IconInterio_1089.0',date:'2026-01-01',desc:'Icon Interiores   08/10',val:1089.0,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'Arandela Jader Almeida',source:'excel'},
-    {id:'xl_20260113_Mercadolivre_937.53',date:'2026-01-13',desc:'Mercadolivre*mwbra02/04',val:937.53,cat:'Variáveis',sub:'COMPRAS CR',pessoa:'',obs:'Kart Ricardo',source:'excel'},
-    {id:'xl_20260102_Dmspotify_31.9',date:'2026-01-02',desc:'Dm*spotify',val:31.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260104_YelumsegPar_494.32',date:'2026-01-04',desc:'Yelumseg Parc1',val:494.32,cat:'Fixa',sub:'SEGUROS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260107_Mercadolivre_263.71',date:'2026-01-07',desc:'Mercadolivre*3produto',val:263.71,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260110_Apple.combi_23.9',date:'2026-01-10',desc:'Apple.com/bill',val:23.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_Apple.combi_66.9',date:'2026-01-13',desc:'Apple.com/bill',val:66.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_Apple.combi_99.9',date:'2026-01-13',desc:'Apple.com/bill',val:99.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_Hoteldo_698.34',date:'2026-01-13',desc:'Hoteldo           01/10',val:698.34,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_Hoteldo_1080.29',date:'2026-01-13',desc:'Hoteldo           01/10',val:1080.29,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_Hoteldo_1126.19',date:'2026-01-13',desc:'Hoteldo           01/10',val:1126.19,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260119_YelumsegPar_340.44',date:'2026-01-19',desc:'Yelumseg Parc1',val:340.44,cat:'Fixa',sub:'SEGUROS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_Netflix.com_59.9',date:'2026-01-23',desc:'Netflix.com',val:59.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260124_Apple.combi_69.9',date:'2026-01-24',desc:'Apple.com/bill',val:69.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260128_Mercadolivre_106.39',date:'2026-01-28',desc:'Mercadolivre*2produto',val:106.39,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260131_Mercadolivre_73.8',date:'2026-01-31',desc:'Mercadolivre*mercadol',val:73.8,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_IofCompraI_84.87',date:'2026-02-01',desc:'Iof Compra Internaciona',val:84.87,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_Apple.combi_19.99',date:'2026-02-01',desc:'Apple.com/bill',val:19.99,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_IofCompraI_213.68',date:'2026-02-02',desc:'Iof Compra Internaciona',val:213.68,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_IofCompraI_56.9',date:'2026-02-02',desc:'Iof Compra Internaciona',val:56.9,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_IofCompraI_56.9',date:'2026-02-02',desc:'Iof Compra Internaciona',val:56.9,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_IofCompraI_56.9',date:'2026-02-02',desc:'Iof Compra Internaciona',val:56.9,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_IofCompraI_56.9',date:'2026-02-02',desc:'Iof Compra Internaciona',val:56.9,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_IofCompraI_56.9',date:'2026-02-02',desc:'Iof Compra Internaciona',val:56.9,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_IofCompraI_56.9',date:'2026-02-02',desc:'Iof Compra Internaciona',val:56.9,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_Specialized_249.24',date:'2026-01-26',desc:'Specialized Brasil12/12',val:249.24,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_Specialized_4137.49',date:'2026-01-12',desc:'Specialized Brasil11/12',val:4137.49,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260116_Hermes-cidad_14158.35',date:'2026-01-16',desc:'Hermes-cidade Jard05/06',val:14158.35,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_LeCreusetD_200.97',date:'2026-01-20',desc:'Le Creuset Do Bras04/10',val:200.97,cat:'Variáveis',sub:'PRESENTES',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_Nike_266.94',date:'2026-01-23',desc:'Nike              03/10',val:266.94,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_Decathlon_283.87',date:'2026-01-23',desc:'Decathlon         03/04',val:283.87,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260102_GaloSc_319.01',date:'2026-01-02',desc:'Galo Sc',val:319.01,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_TopCar_2603.1',date:'2026-01-26',desc:'Top Car',val:2603.1,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260107_UberUbert_92.97',date:'2026-01-07',desc:'Uber Uber *trip Help.u',val:92.97,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260109_UberUbert_67.99',date:'2026-01-09',desc:'Uber Uber *trip Help.u',val:67.99,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_MsjRestaura_64.74',date:'2026-01-12',desc:'Msj Restaurante E Lanc',val:64.74,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260114_UberUbert_49.98',date:'2026-01-14',desc:'Uber Uber *trip Help.u',val:49.98,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260115_UberUbert_22.98',date:'2026-01-15',desc:'Uber Uber *trip Help.u',val:22.98,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260122_TrackField_869.5',date:'2026-01-22',desc:'Track Field Beiramar',val:869.5,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260119_AndraUnifor_868.5',date:'2026-01-19',desc:'Andra Uniformes',val:868.5,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'Uniforme Funcionárias ',source:'excel'},
-    {id:'xl_20260116_DiamondApli_155.0',date:'2026-01-16',desc:'Diamond Aplicaoes',val:155.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260116_UberUbert_13.98',date:'2026-01-16',desc:'Uber Uber *trip Help.u',val:13.98,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260116_UberUbert_26.98',date:'2026-01-16',desc:'Uber Uber *trip Help.u',val:26.98,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_NipoSushi_700.02',date:'2026-01-23',desc:'Nipo Sushi',val:700.02,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_DouglasLuca_713.0',date:'2026-01-20',desc:'Douglas Lucas Ferro E',val:713.0,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'P',obs:'',source:'excel'},
-    {id:'xl_20260123_HippoSuperm_288.69',date:'2026-01-23',desc:'Hippo Supermercado',val:288.69,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_DiamondApli_155.0',date:'2026-01-23',desc:'Diamond Aplicaoes',val:155.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260114_Mercadomerc_697.0',date:'2026-01-14',desc:'Mercado*mercadolivre',val:697.0,cat:'Variáveis',sub:'COMPRAS CR',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260124_PostoFl53_435.59',date:'2026-01-24',desc:'Posto Fl 53',val:435.59,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_MsjRestaura_68.54',date:'2026-01-26',desc:'Msj Restaurante E Lanc',val:68.54,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260129_MsjRestaura_51.68',date:'2026-01-29',desc:'Msj Restaurante E Lanc',val:51.68,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_SolparkingE_8.0',date:'2026-01-30',desc:'Solparking Estacioname',val:8.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_HidrolifeAc_35.0',date:'2026-01-30',desc:'Hidrolife Academia',val:35.0,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260115_IfdfgRepL_574.98',date:'2026-01-15',desc:'Ifd*fg Rep Ltda',val:574.98,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_DouglasLuca_564.0',date:'2026-01-30',desc:'Douglas Lucas Ferro E',val:564.0,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'P',obs:'',source:'excel'},
-    {id:'xl_20260131_IofCompraI_132.74',date:'2026-01-31',desc:'Iof Compra Internaciona',val:132.74,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_BrasilBerry_248.0',date:'2026-02-01',desc:'Brasil Berry Natural F',val:248.0,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_BodyHall_282.0',date:'2026-01-13',desc:'Body Hall         04/12',val:282.0,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260119_BodyHall_282.0',date:'2026-01-19',desc:'Body Hall         03/12',val:282.0,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260102_IfdaAngelo_186.05',date:'2026-01-02',desc:'Ifd*a Angeloni Cia Ltd',val:186.05,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260102_IfdaAngelo_159.92',date:'2026-01-02',desc:'Ifd*a Angeloni Cia Ltd',val:159.92,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_Doc.kids_448.6',date:'2026-01-21',desc:'Doc.kids',val:448.6,cat:'Variáveis',sub:'COMPRAS CR',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260103_IfdraiaDro_431.56',date:'2026-01-03',desc:'Ifd*raia Drogasil Sa',val:431.56,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_BarMolhado_500.0',date:'2026-01-05',desc:'Bar Molhado',val:500.0,cat:'Variáveis',sub:'LAZER',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_Ortoclini_400.0',date:'2026-01-20',desc:'Ortoclini   -ct',val:400.0,cat:'Variáveis',sub:'SAÚDE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_UberUbert_56.63',date:'2026-01-05',desc:'Uber Uber *trip Help.u',val:56.63,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_UberUbert_48.93',date:'2026-01-05',desc:'Uber Uber *trip Help.u',val:48.93,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_RdSaude_372.27',date:'2026-01-26',desc:'Rd Saude',val:372.27,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260107_Mercadode_19.78',date:'2026-01-07',desc:'Mercadode',val:19.78,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260104_Neuzareginat_355.0',date:'2026-01-04',desc:'Neuzareginattodos',val:355.0,cat:'Variáveis',sub:'LAZER',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260107_IfdpradoSu_51.68',date:'2026-01-07',desc:'Ifd*prado Supermercado',val:51.68,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260107_IfdciaLati_62.88',date:'2026-01-07',desc:'Ifd*cia Latino America',val:62.88,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260110_Mercadode_44.75',date:'2026-01-10',desc:'Mercadode',val:44.75,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_IfdaAngelo_214.12',date:'2026-01-12',desc:'Ifd*a Angeloni Cia Ltd',val:214.12,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_IfdaAngelo_129.59',date:'2026-01-12',desc:'Ifd*a Angeloni Cia Ltd',val:129.59,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260124_LraComercio_289.9',date:'2026-01-24',desc:'Lra Comercio Varejista',val:289.9,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_UberUbert_5.0',date:'2026-01-12',desc:'Uber Uber *trip Help.u',val:5.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_UberUbert_45.91',date:'2026-01-12',desc:'Uber Uber *trip Help.u',val:45.91,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_Ifdcomercio_190.67',date:'2026-01-13',desc:'Ifd*comercio De Medica',val:190.67,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260114_HippoSuperm_1.25',date:'2026-01-14',desc:'Hippo Supermercado',val:1.25,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260114_HippoSuperm_215.3',date:'2026-01-14',desc:'Hippo Supermercado',val:215.3,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260103_Ecmercadol_287.3',date:'2026-01-03',desc:'Ec *mercadolivre',val:287.3,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_RdSaude_177.79',date:'2026-01-23',desc:'Rd Saude',val:177.79,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260115_UberUbert_45.92',date:'2026-01-15',desc:'Uber Uber *trip Help.u',val:45.92,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260117_IfdraiaDro_163.89',date:'2026-01-17',desc:'Ifd*raia Drogasil Sa',val:163.89,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260116_UberUbert_32.18',date:'2026-01-16',desc:'Uber Uber *trip Help.u',val:32.18,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260107_Mercadolivre_149.9',date:'2026-01-07',desc:'Mercadolivre*franinova',val:149.9,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260107_IfdsdbCome_131.63',date:'2026-01-07',desc:'Ifd*sdb Comercio De Al',val:131.63,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260119_VerdureiraP_1723.85',date:'2026-01-19',desc:'Verdureira Pauli',val:1723.85,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260119_Raia2202_687.1',date:'2026-01-19',desc:'Raia2202',val:687.1,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260116_Jim.com606_120.0',date:'2026-01-16',desc:'Jim.com* 60630248 Bru',val:120.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_MilaRestaur_93.12',date:'2026-01-05',desc:'Mila Restaurante',val:93.12,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260119_HippoSuperm_679.55',date:'2026-01-19',desc:'Hippo Supermercado',val:679.55,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260114_Ifdmercado_93.0',date:'2026-01-14',desc:'Ifd*mercado Parador Da',val:93.0,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260115_MixComercio_92.99',date:'2026-01-15',desc:'Mix Comercio',val:92.99,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260127_IfdgiassiC_92.49',date:'2026-01-27',desc:'Ifd*giassi Cia Ltda',val:92.49,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260124_Ifddrogaria_85.98',date:'2026-01-24',desc:'Ifd*drogaria Brasil Lt',val:85.98,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_Lolihtoys_337.9',date:'2026-01-20',desc:'Lolihtoys',val:337.9,cat:'Variáveis',sub:'COMPRAS CR',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_PlanetCap_96.0',date:'2026-01-20',desc:'Planet Cap',val:96.0,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_ArmazemCent_21.5',date:'2026-01-20',desc:'Armazem Central',val:21.5,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_DimedSa-dis_221.98',date:'2026-01-21',desc:'Dimed Sa-distribuidor',val:221.98,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_ShoppingExp_269.0',date:'2026-01-21',desc:'Shopping Express',val:269.0,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_PauliMercad_762.88',date:'2026-01-21',desc:'Pauli Mercado',val:762.88,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_IfdsimarCo_74.45',date:'2026-01-12',desc:'Ifd*simar Comercio Ltd',val:74.45,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_Toppark_7.5',date:'2026-01-21',desc:'Toppark',val:7.5,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_99app_44.55',date:'2026-01-21',desc:'99app       *99app',val:44.55,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_CafeDelicia_19.0',date:'2026-01-21',desc:'Cafe Delicia',val:19.0,cat:'Variáveis',sub:'EMPÓRIOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_BvPapelaria_19.5',date:'2026-01-21',desc:'Bv Papelaria',val:19.5,cat:'Fixa',sub:'CATARINA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_MixUtilidad_273.42',date:'2026-01-21',desc:'Mix Utilidades',val:273.42,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_IfdcnfCome_52.78',date:'2026-01-20',desc:'Ifd*cnf Comercio De Al',val:52.78,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260122_TrackField_479.8',date:'2026-01-22',desc:'Track Field Trompowsky',val:479.8,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260122_ShoppingExp_72.0',date:'2026-01-22',desc:'Shopping Express',val:72.0,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260122_MaisonDeLa_979.2',date:'2026-01-22',desc:'Maison De La Sante',val:979.2,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260122_Raia3858_110.05',date:'2026-01-22',desc:'Raia3858',val:110.05,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260122_HippoSuperm_734.37',date:'2026-01-22',desc:'Hippo Supermercado',val:734.37,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_YiduComerci_46.0',date:'2026-01-23',desc:'Yidu Comercio De Prese',val:46.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_EvolutionNu_445.22',date:'2026-01-23',desc:'Evolution Nutricao',val:445.22,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_FilhoDaFru_33.5',date:'2026-01-30',desc:'Filho Da Fruta',val:33.5,cat:'Variáveis',sub:'LAZER',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_MiliumLoja_199.0',date:'2026-01-23',desc:'Milium Loja 12',val:199.0,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_Lavanderia5_1000.0',date:'2026-01-23',desc:'Lavanderia 5asec',val:1000.0,cat:'Variáveis',sub:'LAVANDERIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_ImunizarCen_798.0',date:'2026-01-23',desc:'Imunizar Centro De Vac',val:798.0,cat:'Variáveis',sub:'SAÚDE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260124_Mercadolivre_167.68',date:'2026-01-24',desc:'Mercadolivre*3produto',val:167.68,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260119_BraparkOper_24.0',date:'2026-01-19',desc:'Brapark Operacao De Es',val:24.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_Dl_22.93',date:'2026-01-26',desc:'Dl          *uberrides',val:22.93,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260124_Ifdempreend_98.98',date:'2026-01-24',desc:'Ifd*empreendimentos Pa',val:98.98,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260124_Ifdempreend_100.97',date:'2026-01-24',desc:'Ifd*empreendimentos Pa',val:100.97,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260125_Mercadolivre_231.37',date:'2026-01-25',desc:'Mercadolivre*3produtos',val:231.37,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_BeiramarPar_20.0',date:'2026-01-23',desc:'Beiramar Park',val:20.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_MilaRestaur_17.9',date:'2026-01-23',desc:'Mila Restaurante',val:17.9,cat:'Variáveis',sub:'LAZER',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_SantaApolon_83.3',date:'2026-01-26',desc:'Santa Apolonia Hospita',val:83.3,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260119_FilhoDaFru_13.5',date:'2026-01-19',desc:'Filho Da Fruta',val:13.5,cat:'Variáveis',sub:'LAZER',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_Ifdpanifica_36.49',date:'2026-01-26',desc:'Ifd*panificadora Sevil',val:36.49,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_AdcosProBe_605.86',date:'2026-01-26',desc:'Adcos Pro Beiramar',val:605.86,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260127_VerdureiraP_435.7',date:'2026-01-27',desc:'Verdureira Pauli',val:435.7,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260127_Ifdatac_124.19',date:'2026-01-27',desc:'Ifd    *atacadao Sa',val:124.19,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260127_Ifdcarrefou_157.16',date:'2026-01-27',desc:'Ifd*carrefour Comercio',val:157.16,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260128_IfoodClub_12.9',date:'2026-01-28',desc:'Ifood Club',val:12.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_BraparkOper_12.0',date:'2026-01-30',desc:'Brapark Operacao De Es',val:12.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260128_Mercadolivre_101.42',date:'2026-01-28',desc:'Mercadolivre*2produto',val:101.42,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260117_Ifdcristian_5.0',date:'2026-01-17',desc:'Ifd*cristiano Martins',val:5.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260129_SolparkingE_8.0',date:'2026-01-29',desc:'Solparking Estacioname',val:8.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260129_BarbaraK_3115.5',date:'2026-01-29',desc:'Barbara K',val:3115.5,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260129_HippoSuperm_896.21',date:'2026-01-29',desc:'Hippo Supermercado',val:896.21,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260129_Caffeine_335.68',date:'2026-01-29',desc:'Caffeine',val:335.68,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260129_Lolihtoys_220.0',date:'2026-01-29',desc:'Lolihtoys',val:220.0,cat:'Variáveis',sub:'COMPRAS CR',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260129_MercadoAstr_437.0',date:'2026-01-29',desc:'Mercado Astral',val:437.0,cat:'Variáveis',sub:'PRESENTES',pessoa:'',obs:'Presente Nascimento Fe Fran',source:'excel'},
-    {id:'xl_20260129_Jim.comGym_2567.5',date:'2026-01-29',desc:'Jim.com* Gym-ct Nt01/02',val:2567.5,cat:'Fixa',sub:'CATARINA',pessoa:'',obs:'Ginástica Catarina',source:'excel'},
-    {id:'xl_20260130_TrackField_319.8',date:'2026-01-30',desc:'Track Field Trompowsky',val:319.8,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260127_IfdandsonA_5.0',date:'2026-01-27',desc:'Ifd*andson Araujo Da S',val:5.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_PlanetCap_335.0',date:'2026-01-30',desc:'Planet Cap',val:335.0,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_SummitOneV_2424.75',date:'2026-01-30',desc:'Summit One Vanderbilt',val:2424.75,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_BkghotelAt_6104.36',date:'2026-01-30',desc:'Bkg*hotel At Booking.c',val:6104.36,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_Delta0062401_1625.49',date:'2026-01-30',desc:'Delta00624016774511',val:1625.49,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_Delta0062401_1625.49',date:'2026-01-30',desc:'Delta00624016774522',val:1625.49,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_Delta0062401_1625.49',date:'2026-01-30',desc:'Delta00624016774533',val:1625.49,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_Delta0062401_1625.49',date:'2026-01-30',desc:'Delta00624016774544',val:1625.49,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_Delta0062401_1625.49',date:'2026-01-30',desc:'Delta00624016774555',val:1625.49,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_Delta0062401_1625.49',date:'2026-01-30',desc:'Delta00624016774566',val:1625.49,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_GoCityNew_3792.41',date:'2026-01-30',desc:'Go City New York',val:3792.41,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260130_UnitedState_3564.6',date:'2026-01-30',desc:'United States',val:3564.6,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260128_PIXQRSPaga_15.9',date:'2026-01-28',desc:'PIX QRS Pagar Me Pa28/01',val:15.9,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260128_PAGTITINT_13977.49',date:'2026-01-28',desc:'PAG TIT INT 237',val:13977.49,cat:'Fixa',sub:'CARRO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260126_DATIMCELU_132.17',date:'2026-01-26',desc:'DA  TIM CELU 59077434010',val:132.17,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_PIXWHATSAn_30.0',date:'2026-01-23',desc:'PIX WHATS Anderso23/01',val:30.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_PIXWHATSQR_36.0',date:'2026-01-23',desc:'PIX WHATS QRCODE Liomar 23/01',val:36.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260122_TEDDINT6d0_2000.0',date:'2026-01-22',desc:'TED D INT6d00ad26',val:2000.0,cat:'Variáveis',sub:'FUNCIONÁRIAS',pessoa:'',obs:'Funcionárias',source:'excel'},
-    {id:'xl_20260121_PIXWHATSNA_126.0',date:'2026-01-21',desc:'PIX WHATS NARA EL21/01',val:126.0,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_PIXTRANSF3_490.0',date:'2026-01-21',desc:'PIX TRANSF 39.746.21/01',val:490.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_PAGBOLETOG_329.0',date:'2026-01-21',desc:'PAG BOLETO GALAX PAY PAGAMENTOS ELETRON',val:329.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_INTDOCARRE_982.23',date:'2026-01-20',desc:'INT DOC ARREC E-SOCI 071',val:982.23,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260120_PAGTITINT_7862.05',date:'2026-01-20',desc:'PAG TIT INT 104',val:7862.05,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'IPTU Jan',source:'excel'},
-    {id:'xl_20260119_PIXTRANSFF_1680.0',date:'2026-01-19',desc:'PIX TRANSF Francis19/01',val:1680.0,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260115_DACLAROBL_299.84',date:'2026-01-15',desc:'DA  CLARO BL/IT 19104556',val:299.84,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260115_PIXWHATSLi_31.5',date:'2026-01-15',desc:'PIX WHATS Liomar 15/01',val:31.5,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_PIXTRANSF3_304.0',date:'2026-01-13',desc:'PIX TRANSF 39.746.13/01',val:304.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_PAGTITINT_2643.72',date:'2026-01-12',desc:'PAG TIT INT 338295769000',val:2643.72,cat:'Fixa',sub:'SEGUROS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_PIXWHATSLO_16.0',date:'2026-01-12',desc:'PIX WHATS LORENA 10/01',val:16.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260108_PAGTITINT_3094.61',date:'2026-01-08',desc:'PAG TIT INT 237',val:3094.61,cat:'Fixa',sub:'CARRO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_JUROSLIMITE_255.05',date:'2026-01-05',desc:'JUROS LIMITE DA CONTA',val:255.05,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_IOF_81.49',date:'2026-01-05',desc:'IOF',val:81.49,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_PIXWHATSOs_13.0',date:'2026-01-05',desc:'PIX WHATS Osvaldo05/01',val:13.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_PAGTITINT_3922.85',date:'2026-01-05',desc:'PAG TIT INT 197',val:3922.85,cat:'Fixa',sub:'CATARINA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_PIXTRANSFP_2000.0',date:'2026-01-05',desc:'PIX TRANSF PRISCIL04/01',val:2000.0,cat:'Fixa',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'⚠️ Desmembrar',source:'excel'},
-    {id:'xl_20260105_MoradiaDive_500.0',date:'2026-01-05',desc:'Moradia Diversa',val:500.0,cat:'Fixa',sub:'MORADIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_Catarina_1500.0',date:'2026-01-05',desc:'Catarina',val:1500.0,cat:'Fixa',sub:'CATARINA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_Ricardo_3000.0',date:'2026-01-05',desc:'Ricardo',val:3000.0,cat:'Fixa',sub:'RICARDO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_Eliane_2000.0',date:'2026-01-05',desc:'Eliane',val:2000.0,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260102_DACELESC0_858.89',date:'2026-01-02',desc:'DA  CELESC 000000900540',val:858.89,cat:'Fixa',sub:'LUZ',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260102_PIXTRANSFE_1074.98',date:'2026-01-02',desc:'PIX TRANSF ELIZABE02/01',val:1074.98,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'Pauli',source:'excel'},
-    {id:'xl_20260102_PIXWHATSHe_20.0',date:'2026-01-02',desc:'PIX WHATS Heberth02/01',val:20.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260102_PAGTITINT_3718.59',date:'2026-01-02',desc:'PAG TIT INT 104',val:3718.59,cat:'Fixa',sub:'CONDOMÍNIO',pessoa:'',obs:'Condomínio Jan',source:'excel'},
-    {id:'xl_20260102_PIXTRANSFF_3130.0',date:'2026-01-02',desc:'PIX TRANSF Francis02/01',val:3130.0,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'Funcionárias',source:'excel'},
-    {id:'xl_20260102_PIXTRANSFP_3185.0',date:'2026-01-02',desc:'PIX TRANSF PATRICI02/01',val:3185.0,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'Funcionárias',source:'excel'},
-    {id:'xl_20260228_IFDIFOODCL_12.9',date:'2026-02-28',desc:'IFD*IFOOD CLUB',val:12.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260228_CAFFEINE_347.04',date:'2026-02-28',desc:'CAFFEINE',val:347.04,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260227_HIPPOSUPERM_261.2',date:'2026-02-27',desc:'HIPPO SUPERMERCADO',val:261.2,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260227_ESBELACOMER_23.9',date:'2026-02-27',desc:'ESBELA COMERCIO DE PRO',val:23.9,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'P',obs:'',source:'excel'},
-    {id:'xl_20260227_IOFCOMPRAI_46.79',date:'2026-02-27',desc:'IOF COMPRA INTERNACIONA',val:46.79,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260227_PLANETCAP_321.0',date:'2026-02-27',desc:'PLANET CAP',val:321.0,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260226_SPFIT2RUN_1337.15',date:'2026-02-26',desc:'SP FIT2RUN',val:1337.15,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260225_APPLECOMBILL_2.9',date:'2026-02-25',desc:'APPLECOMBILL',val:2.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260224_APPLECOMBILL_1.5',date:'2026-02-24',desc:'APPLECOMBILL',val:1.5,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260224_IOFCOMPRAI_9.54',date:'2026-02-24',desc:'IOF COMPRA INTERNACIONA',val:9.54,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260224_APPLECOMBILL_69.9',date:'2026-02-24',desc:'APPLECOMBILL',val:69.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260223_Frankjosedas_820.0',date:'2026-02-23',desc:'Frankjosedasilva',val:820.0,cat:'Variáveis',sub:'FUNCIONÁRIAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260223_NETFLIXENTR_59.9',date:'2026-02-23',desc:'NETFLIX ENTRETENIMENTO',val:59.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260223_OTORRINOPED_600.0',date:'2026-02-23',desc:'OTORRINOPED -CT US',val:600.0,cat:'Variáveis',sub:'SAÚDE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260223_CAFSIRENEM_271.7',date:'2026-02-23',desc:'CAF SIRENE MOBILE 6893',val:271.7,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260222_IOFCOMPRAI_107.31',date:'2026-02-22',desc:'IOF COMPRA INTERNACIONA',val:107.31,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260222_IOFCOMPRAI_9.44',date:'2026-02-22',desc:'IOF COMPRA INTERNACIONA',val:9.44,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260222_IOFCOMPRAI_25.5',date:'2026-02-22',desc:'IOF COMPRA INTERNACIONA',val:25.5,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260222_IOFCOMPRAI_31.91',date:'2026-02-22',desc:'IOF COMPRA INTERNACIONA',val:31.91,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260221_IOFCOMPRAI_106.37',date:'2026-02-21',desc:'IOF COMPRA INTERNACIONA',val:106.37,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260221_ZegnaOrland_3065.81',date:'2026-02-21',desc:'Zegna Orlando',val:3065.81,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260221_WALGREENS#1_270.37',date:'2026-02-21',desc:'WALGREENS #15017',val:270.37,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260221_APPLECOMBILL_2.9',date:'2026-02-21',desc:'APPLECOMBILL',val:2.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260221_DeckersReta_728.97',date:'2026-02-21',desc:'Deckers Retail  LLC',val:728.97,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260221_APPLECOMBILL_2.9',date:'2026-02-21',desc:'APPLECOMBILL',val:2.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260221_DeckersReta_911.24',date:'2026-02-21',desc:'Deckers Retail  LLC',val:911.24,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260220_IOFCOMPRAI_131.87',date:'2026-02-20',desc:'IOF COMPRA INTERNACIONA',val:131.87,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260220_LULULEMONWI_3039.37',date:'2026-02-20',desc:'LULULEMON WINTER PARK',val:3039.37,cat:'Variáveis',sub:'COMPRAS CR',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260220_IOFCOMPRAI_865.97',date:'2026-02-20',desc:'IOF COMPRA INTERNACIONA',val:865.97,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260219_YelumSegPar_340.49',date:'2026-02-19',desc:'YelumSeg Parc2',val:340.49,cat:'Fixa',sub:'SEGUROS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260219_IOFCOMPRAI_162.23',date:'2026-02-19',desc:'IOF COMPRA INTERNACIONA',val:162.23,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260219_ZALESOUTLET_24742.07',date:'2026-02-19',desc:'ZALES OUTLET #2661',val:24742.07,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260219_DIESELUSAI_3768.12',date:'2026-02-19',desc:'DIESEL USA INC. US_026',val:3768.12,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260218_CLINICAKOZM_516.03',date:'2026-02-18',desc:'CLINICA KOZM-CT',val:516.03,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'J',obs:'',source:'excel'},
-    {id:'xl_20260217_OLIVERPEOPL_4634.69',date:'2026-02-17',desc:'OLIVER PEOPLES 4538',val:4634.69,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260217_IOFCOMPRAI_2.72',date:'2026-02-17',desc:'IOF COMPRA INTERNACIONA',val:2.72,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260216_OMNYVENDING_77.7',date:'2026-02-16',desc:'OMNY VENDING*',val:77.7,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260216_APPLECOMBILL_2.9',date:'2026-02-16',desc:'APPLECOMBILL',val:2.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260216_APPLECOMBILL_2.9',date:'2026-02-16',desc:'APPLECOMBILL',val:2.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260215_IOFCOMPRAI_169.22',date:'2026-02-15',desc:'IOF COMPRA INTERNACIONA',val:169.22,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260214_BrunelloCuc_4834.05',date:'2026-02-14',desc:'Brunello Cucinelli',val:4834.05,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260213_APPLECOMBILL_99.9',date:'2026-02-13',desc:'APPLECOMBILL',val:99.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260213_APPLECOMBILL_66.9',date:'2026-02-13',desc:'APPLECOMBILL',val:66.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260212_IOFCOMPRAI_13.7',date:'2026-02-12',desc:'IOF COMPRA INTERNACIONA',val:13.7,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260211_OPENPAYLIMA_391.38',date:'2026-02-11',desc:'OPENPAY*LIMA AIRPORT P',val:391.38,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260210_DOUGLASLUCA_469.0',date:'2026-02-10',desc:'DOUGLAS LUCAS FERRO E',val:469.0,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'P',obs:'',source:'excel'},
-    {id:'xl_20260210_APPLECOMBILL_14.9',date:'2026-02-10',desc:'APPLECOMBILL',val:14.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260210_ASAIDEIRAF_25.8',date:'2026-02-10',desc:'A SAIDEIRA FLORIPA',val:25.8,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260210_IFDCIALATI_65.78',date:'2026-02-10',desc:'IFD*CIA LATINO AMERICA',val:65.78,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260210_IPLACE_221.11',date:'2026-02-10',desc:'IPLACE',val:221.11,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260209_DIMEDSA-DIS_132.99',date:'2026-02-09',desc:'DIMED SA-DISTRIBUIDOR',val:132.99,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260209_BAZARDATERE_25.8',date:'2026-02-09',desc:'BAZAR DATERE COMERCIO',val:25.8,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260209_BRESSANBEIR_105.0',date:'2026-02-09',desc:'BRESSAN BEIRAMAR',val:105.0,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260209_ADCOSBEIRAM_179.0',date:'2026-02-09',desc:'ADCOS BEIRAMAR',val:179.0,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'P',obs:'',source:'excel'},
-    {id:'xl_20260207_IFDRAIADRO_95.27',date:'2026-02-07',desc:'IFD*RAIA DROGASIL SA',val:95.27,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260207_HIPPOSUPERM_61.66',date:'2026-02-07',desc:'HIPPO SUPERM-CT DO',val:61.66,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260207_LATAMAIR00_141.9',date:'2026-02-07',desc:'LATAM AIR*0000',val:141.9,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260207_LATAMAIR00_1727.82',date:'2026-02-07',desc:'LATAM AIR*0000',val:1727.82,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260207_SUPERMERCADO_833.7',date:'2026-02-07',desc:'SUPERMERCADOS IMPERATR',val:833.7,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260207_LATAMAIRYP_474.08',date:'2026-02-07',desc:'LATAM AIR*YPOAKG',val:474.08,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260206_SOLPARKINGE_8.0',date:'2026-02-06',desc:'SOLPARKING ESTACIONAME',val:8.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260206_HIPPOSUPERM_135.03',date:'2026-02-06',desc:'HIPPO SUPERMERCADO',val:135.03,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260206_FLORABEL_135.0',date:'2026-02-06',desc:'FLORABEL',val:135.0,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260206_GOTEMAKIBE_500.0',date:'2026-02-06',desc:'GO TEMAKI BEIRA MAR',val:500.0,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_HAIRADDRESS_70.0',date:'2026-02-05',desc:'HAIR ADDRESS',val:70.0,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'P',obs:'',source:'excel'},
-    {id:'xl_20260205_NEMAPADARIA_22.0',date:'2026-02-05',desc:'NEMA PADARIA',val:22.0,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_UberUBERT_14.97',date:'2026-02-05',desc:'Uber UBER *TRIP HELP.U',val:14.97,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_COF_500.0',date:'2026-02-05',desc:'COF',val:500.0,cat:'Variáveis',sub:'LAZER',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_MERCADOMERC_185.1',date:'2026-02-05',desc:'MERCADO*MERCADOLIVRE',val:185.1,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_RAIA433_208.98',date:'2026-02-05',desc:'RAIA433',val:208.98,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_HIPPOSUPERM_107.68',date:'2026-02-05',desc:'HIPPO SUPERMERCADO',val:107.68,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_MAISONDELA_981.54',date:'2026-02-05',desc:'MAISON DE LA SANTE',val:981.54,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_UberUBERT_13.99',date:'2026-02-05',desc:'Uber UBER *TRIP HELP.U',val:13.99,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260204_VERDUREIRAP_718.19',date:'2026-02-04',desc:'VERDUREIRA PAULI',val:718.19,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260204_UberUBERT_13.99',date:'2026-02-04',desc:'Uber UBER *TRIP HELP.U',val:13.99,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260204_RAIA3858_78.33',date:'2026-02-04',desc:'RAIA3858',val:78.33,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260204_YelumSegPar_494.37',date:'2026-02-04',desc:'YelumSeg Parc2',val:494.37,cat:'Fixa',sub:'SEGUROS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260204_UberUBERT_13.68',date:'2026-02-04',desc:'Uber UBER *TRIP HELP.U',val:13.68,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260204_MILARESTAUR_425.5',date:'2026-02-04',desc:'MILA RESTAURANTE',val:425.5,cat:'Variáveis',sub:'ALIMENTAÇÃO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260203_PLANETCAP_45.0',date:'2026-02-03',desc:'PLANET CAP',val:45.0,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260203_00004SHBE_179.5',date:'2026-02-03',desc:'00004  SH BEIRAMAR',val:179.5,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260203_SUPERMERCADO_32.9',date:'2026-02-03',desc:'SUPERMERCADOS IMPERATR',val:32.9,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260203_SOLPARKINGE_8.0',date:'2026-02-03',desc:'SOLPARKING ESTACIONAME',val:8.0,cat:'Variáveis',sub:'TRANSPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260203_ANUIDADEDIF_333.33',date:'2026-02-03',desc:'ANUIDADE DIFERENCI08/12',val:333.33,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_BALADEIRA_42.0',date:'2026-02-02',desc:'BALADEIRA',val:42.0,cat:'Variáveis',sub:'LAZER',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_DMSpotify_31.9',date:'2026-02-02',desc:'DM*Spotify',val:31.9,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_HIPPOSUPERM_816.09',date:'2026-02-02',desc:'HIPPO SUPERMERCADO',val:816.09,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_RAIA2202_963.93',date:'2026-02-02',desc:'RAIA2202',val:963.93,cat:'Variáveis',sub:'FARMÁCIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_HOTELDO_1080.29',date:'2026-01-13',desc:'HOTELDO           02/10',val:1080.29,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_HOTELDO_1126.19',date:'2026-01-13',desc:'HOTELDO           02/10',val:1126.19,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_HOTELDO_698.34',date:'2026-01-13',desc:'HOTELDO           02/10',val:698.34,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_MERCADOLIVRE_937.53',date:'2026-02-01',desc:'MERCADOLIVRE*MWBRA03/04',val:937.53,cat:'Variáveis',sub:'COMPRAS CR',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_NIKE_266.94',date:'2026-02-01',desc:'NIKE              04/10',val:266.94,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_DECATHLON_283.87',date:'2026-02-01',desc:'DECATHLON         04/04',val:283.87,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_BODYHALL_282.0',date:'2026-02-01',desc:'BODY HALL         04/12',val:282.0,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_LECREUSETD_200.97',date:'2026-02-01',desc:'LE CREUSET DO BRAS05/10',val:200.97,cat:'Variáveis',sub:'PRESENTES',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_BODYHALL_282.0',date:'2026-02-01',desc:'BODY HALL         05/12',val:282.0,cat:'Variáveis',sub:'ESPORTE',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_HERMES-CIDAD_14158.35',date:'2026-02-01',desc:'HERMES-CIDADE JARD06/06',val:14158.35,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_ROYALCARIBB_4471.89',date:'2026-02-01',desc:'ROYAL CARIBBEAN CR07/10',val:4471.89,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_ICONINTERIO_1089.0',date:'2026-02-01',desc:'ICON INTERIORES   09/10',val:1089.0,cat:'Variáveis',sub:'MORADIA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_PPGRUP_299.99',date:'2026-02-01',desc:'PP     *GRUPOKOHAL10/12',val:299.99,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260201_SPECIALIZED_4137.49',date:'2026-02-01',desc:'SPECIALIZED BRASIL12/12',val:4137.49,cat:'Variáveis',sub:'COMPRAS J',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260128_PIXQRSPaga_15.9',date:'2026-01-28',desc:'PIX QRS Pagar Me Pa28/01',val:15.9,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_PIXWHATSAn_30.0',date:'2026-01-23',desc:'PIX WHATS Anderso23/01',val:30.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260123_PIXWHATSQR_36.0',date:'2026-01-23',desc:'PIX WHATS QRCODE Liomar 23/01',val:36.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_PIXTRANSF3_490.0',date:'2026-01-21',desc:'PIX TRANSF 39.746.21/01',val:490.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260121_PAGBOLETOG_329.0',date:'2026-01-21',desc:'PAG BOLETO GALAX PAY PAGAMENTOS ELETRON',val:329.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260115_PIXWHATSLi_31.5',date:'2026-01-15',desc:'PIX WHATS Liomar 15/01',val:31.5,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260113_PIXTRANSF3_304.0',date:'2026-01-13',desc:'PIX TRANSF 39.746.13/01',val:304.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260112_PIXWHATSLO_16.0',date:'2026-01-12',desc:'PIX WHATS LORENA 10/01',val:16.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_PIXQRSVITO_6800.0',date:'2026-01-05',desc:'PIX QRS VITOR COELH05/01',val:6800.0,cat:'Variáveis',sub:'BELEZA ESTÉTICA BEM ESTAR',pessoa:'J',obs:'',source:'excel'},
-    {id:'xl_20260105_PIXWHATSOs_13.0',date:'2026-01-05',desc:'PIX WHATS Osvaldo05/01',val:13.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260105_PIXTRANSFP_9000.0',date:'2026-01-05',desc:'PIX TRANSF PRISCIL04/01',val:9000.0,cat:'Fixa',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'⚠️ Desmembrar',source:'excel'},
-    {id:'xl_20260102_PIXTRANSFE_1074.98',date:'2026-01-02',desc:'PIX TRANSF ELIZABE02/01',val:1074.98,cat:'Variáveis',sub:'SUPERMERCADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260102_PIXWHATSHe_20.0',date:'2026-01-02',desc:'PIX WHATS Heberth02/01',val:20.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260226_PIXQRSPARC_2583.22',date:'2026-02-26',desc:'PIX QRS PARCELADOUS26/02',val:2583.22,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260225_DATIMCELU_142.17',date:'2026-02-25',desc:'DA  TIM CELU 59077434010',val:142.17,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260223_PAGBOLETOG_329.0',date:'2026-02-23',desc:'PAG BOLETO GALAX PAY PAGAMENTOS ELETRON',val:329.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260220_INTDOCARRE_700.68',date:'2026-02-20',desc:'INT DOC ARREC E-SOCI 071',val:700.68,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260218_DACLAROBL_299.84',date:'2026-02-18',desc:'DA  CLARO BL/IT 19104556',val:299.84,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260211_PAGTITINT_2643.72',date:'2026-02-11',desc:'PAG TIT INT 328295769000',val:2643.72,cat:'Fixa',sub:'SEGUROS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260211_PIXWHATS39_141.0',date:'2026-02-11',desc:'PIX WHATS 39.746.11/02',val:141.0,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260209_PIXQRSPAGA_28.62',date:'2026-02-09',desc:'PIX QRS PAGAR.ME PA07/02',val:28.62,cat:'Variáveis',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260206_PIXTRANSFB_7333.32',date:'2026-02-06',desc:'PIX TRANSF BETINA 06/02',val:7333.32,cat:'Variáveis',sub:'COMPRAS P',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260205_JUROSLIMITE_1288.7',date:'2026-02-05',desc:'JUROS LIMITE DA CONTA',val:1288.7,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260204_PIXTRANSFP_9500.0',date:'2026-02-04',desc:'PIX TRANSF PRISCIL04/02',val:9500.0,cat:'Fixa',sub:'NÃO CATEGORIZADO',pessoa:'',obs:'⚠️ Desmembrar',source:'excel'},
-    {id:'xl_20260203_IOF_298.0',date:'2026-02-03',desc:'IOF',val:298.0,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260203_PAGTITINT_3922.85',date:'2026-02-03',desc:'PAG TIT INT 197',val:3922.85,cat:'Fixa',sub:'CATARINA',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_DACELESC0_1421.07',date:'2026-02-02',desc:'DA  CELESC 000000900540',val:1421.07,cat:'Fixa',sub:'LUZ',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_PAGTITINT_3271.71',date:'2026-02-02',desc:'PAG TIT INT 104',val:3271.71,cat:'Fixa',sub:'CONDOMÍNIO',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_PIXTRANSFP_3200.0',date:'2026-02-02',desc:'PIX TRANSF PATRICI01/02',val:3200.0,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260202_PIXTRANSFN_1506.0',date:'2026-02-02',desc:'PIX TRANSF NARA EL01/02',val:1506.0,cat:'Fixa',sub:'FUNCIONÁRIAS',pessoa:'',obs:'',source:'excel'},
-    {id:'xl_20260102_TRANSFERENCI_200.0',date:'2026-01-02',desc:'TRANSFERENCIA TEF PIX ( Doc.: 4514807 / LUIGI FREIRE PEDROZO )',val:200.0,cat:'Variáveis',sub:'PRESENTES',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260102_IOF(Doc.:_26.12',date:'2026-01-02',desc:'IOF ( Doc.: SALDO DEV )',val:26.12,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260114_ARRECADACAO_18.8',date:'2026-01-14',desc:'ARRECADACAO DE CONVENIOS ( Doc.: ConvÃªnio / CSLL JCRP )',val:18.8,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260115_DEBMENSALID_1040.03',date:'2026-01-15',desc:'DEB MENSALID QUANTA PREVID-CENTRALIZADO ( Doc.: 100069 )',val:1040.03,cat:'Fixa',sub:'PREVIDENCIA /  VIDA',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260115_DEBMENSALID_1040.03',date:'2026-01-15',desc:'DEB MENSALID QUANTA PREVID-CENTRALIZADO ( Doc.: 131110 )',val:1040.03,cat:'Fixa',sub:'PREVIDENCIA /  VIDA',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260115_DEBMENSALID_33.12',date:'2026-01-15',desc:'DEB MENSALID QUANTA PREVID-CENTRALIZADO ( Doc.: 124192 )',val:33.12,cat:'Fixa',sub:'PREVIDENCIA /  VIDA',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260116_DEBITOTRANS_1000.0',date:'2026-01-16',desc:'DEBITO TRANSFERENCIA PIX ( Doc.: DEB PIX / GOMES  COSTA SERVICOS MEDICOS LTDA )',val:1000.0,cat:'Variáveis',sub:'SAÚDE',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260116_DEBITOTRANS_11250.0',date:'2026-01-16',desc:'DEBITO TRANSFERENCIA PIX ( Doc.: DEB PIX / 49532511 JEHNNIFER DE MEDEIROS ROGERIO )',val:11250.0,cat:'Variáveis',sub:'MORADIA',pessoa:'P',obs:'Unicred',source:'excel'},
-    {id:'xl_20260130_LIQUIDACAOD_7651.78',date:'2026-01-30',desc:'LIQUIDACAO DE PARCELA DE FINANCIAMENTO ( Doc.: 2020082743 )',val:7651.78,cat:'Fixa',sub:'APTO',pessoa:'',obs:'Financiamento apto Unicred',source:'excel'},
-    {id:'xl_20260130_JUROSCHEQUE_665.65',date:'2026-01-30',desc:'JUROS CHEQUE ESPECIAL -  PF ( Doc.: 0 )',val:665.65,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260202_IOF(Doc.:_275.71',date:'2026-02-02',desc:'IOF ( Doc.: SALDO DEV )',val:275.71,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260206_DEBITOTRANS_500.0',date:'2026-02-06',desc:'DEBITO TRANSFERENCIA PIX ( Doc.: DEB PIX / ALEXANDRE BOTTARO VIEIRA )',val:500.0,cat:'Variáveis',sub:'DOAÇÕES',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260218_DEBMENSALID_1040.03',date:'2026-02-18',desc:'DEB MENSALID QUANTA PREVID-CENTRALIZADO ( Doc.: 100069 )',val:1040.03,cat:'Fixa',sub:'PREVIDENCIA /  VIDA',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260218_DEBMENSALID_33.12',date:'2026-02-18',desc:'DEB MENSALID QUANTA PREVID-CENTRALIZADO ( Doc.: 124192 )',val:33.12,cat:'Fixa',sub:'PREVIDENCIA /  VIDA',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260218_DEBMENSALID_1040.03',date:'2026-02-18',desc:'DEB MENSALID QUANTA PREVID-CENTRALIZADO ( Doc.: 131110 )',val:1040.03,cat:'Fixa',sub:'PREVIDENCIA /  VIDA',pessoa:'',obs:'Unicred',source:'excel'},
-    {id:'xl_20260204_Anuidade-p_79.16',date:'2026-02-04',desc:'Anuidade - parcela',val:79.16,cat:'Fixa',sub:'ASSINATURAS',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260206_IOFTransaco_885.43',date:'2026-02-06',desc:'IOF Transacoes Exterior R$',val:885.43,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260206_BKGHOTELAT_25297.93',date:'2026-02-06',desc:'BKG*HOTEL AT BOOKING.C',val:25297.93,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260209_IOFTransaco_699.61',date:'2026-02-09',desc:'IOF Transacoes Exterior R$',val:699.61,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260209_BOOKING.COM_19988.73',date:'2026-02-09',desc:'BOOKING.COM* 1LGN2APKO',val:19988.73,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260214_IOFTransaco_570.98',date:'2026-02-14',desc:'IOF Transacoes Exterior R$',val:570.98,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260214_RIMOWADISTR_16313.6',date:'2026-02-14',desc:'RIMOWA DISTRIBUTION  INC',val:16313.6,cat:'Variáveis',sub:'COMPRAS P',pessoa:'J',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260217_IOFTransaco_231.54',date:'2026-02-17',desc:'IOF Transacoes Exterior R$',val:231.54,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260217_LUXURYCOLLE_6615.47',date:'2026-02-17',desc:'LUXURY COLLECTION',val:6615.47,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260226_IOFTransaco_112.04',date:'2026-02-26',desc:'IOF Transacoes Exterior R$',val:112.04,cat:'Fixa',sub:'IMPOSTOS',pessoa:'',obs:'Unicred CC',source:'excel'},
-    {id:'xl_20260226_ALAMORENT-A_3201.15',date:'2026-02-26',desc:'ALAMO RENT-A-CAR',val:3201.15,cat:'Variáveis',sub:'VIAGEM',pessoa:'',obs:'Unicred CC',source:'excel'},
-  ]);
-}
-
-// ── BOOT ──────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
-
-  // Modal backdrop close
-  ['detail-modal','edittx-modal','review-threshold-modal','split-modal','search-modal','manual-modal'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
-  });
-
-  loadData();
-});

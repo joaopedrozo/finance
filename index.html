@@ -71,7 +71,7 @@
     <div class="manual-field"><label>Tipo</label>
       <select id="edittx-cat"><option value="Fixa">Fixa</option><option value="Variáveis">Variável</option></select>
     </div>
-    <button class="btn" style="margin-top:8px" onclick="saveEditTx()">Salvar</button>
+    <button id="edittx-save-btn" class="btn" style="margin-top:8px" onclick="saveEditTx()">Salvar</button>
     <button class="btn btn-ghost" onclick="closeEditTx()">Cancelar</button>
     <button class="btn btn-ghost" style="color:var(--red)" onclick="deleteTx()">Excluir</button>
   </div>
@@ -100,6 +100,7 @@
     </div>
     <div class="header-right">
       <div id="sync-badge" class="sync-badge local">○ Local</div>
+      <button id="hide-btn" class="header-search-btn" onclick="toggleHide()" title="Ocultar valores">🙈</button>
       <button class="header-search-btn" onclick="openSearch()">🔍</button>
     </div>
   </div>
@@ -158,23 +159,16 @@
     </div>
 
     <div id="screen-patrimonio" class="screen">
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <div class="card-title">Patrimônio Total</div>
-            <div id="pat-total-val" style="font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:400;color:var(--text);margin-top:4px"></div>
-          </div>
-        </div>
-        <div id="pat-donut" style="display:flex;align-items:center;gap:12px;padding:4px 0"></div>
+      <div style="padding:16px 16px 4px">
+        <div style="font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Patrimônio Total</div>
+        <div id="pat-total-val" style="font-size:32px;font-weight:300;color:var(--text);letter-spacing:-.01em"></div>
       </div>
       <div class="card">
-        <div class="card-header"><div class="card-title">Liquidez &amp; Investimentos</div></div>
-        <div id="pat-items-liq"></div>
+        <div class="card-header"><div class="card-title">Composição</div></div>
+        <div id="pat-donut" style="display:flex;align-items:center;gap:12px;padding:0 16px 12px"></div>
       </div>
-      <div class="card">
-        <div class="card-header"><div class="card-title">Imóveis</div></div>
-        <div id="pat-items-imob"></div>
-      </div>
+      <div id="pat-grupos" style="padding:0 0 8px"></div>
+      <div id="pat-fundo-wrap" class="pat-fundo-wrap" style="margin:0 16px 8px"></div>
       <div style="height:8px"></div>
     </div>
 
