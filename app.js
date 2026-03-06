@@ -108,6 +108,41 @@ const cache = {
   load() { try { return JSON.parse(localStorage.getItem('jcrp_txs')||'[]'); } catch { return []; } },
   save(txs) { try { localStorage.setItem('jcrp_txs', JSON.stringify(txs)); } catch(e) {} }
 };
+
+// Tracks every local edit (sub/cat/obs changes + deletions)
+// so they survive a Sheets sync that returns stale data
+const localEdits = {
+  _key: 'jcrp_local_edits',
+  load() { try { return JSON.parse(localStorage.getItem(this._key)||'{}'); } catch { return {}; } },
+  save(obj) { try { localStorage.setItem(this._key, JSON.stringify(obj)); } catch(e) {} },
+  set(id, fields) {
+    const all = this.load();
+    all[id] = {...(all[id]||{}), ...fields, _ts: Date.now()};
+    this.save(all);
+  },
+  del(id) {
+    const all = this.load();
+    all[id] = {_deleted: true, _ts: Date.now()};
+    this.save(all);
+  },
+  clear(id) {
+    const all = this.load();
+    delete all[id];
+    this.save(all);
+  },
+  applyTo(txs) {
+    const edits = this.load();
+    // Remove deleted
+    const filtered = txs.filter(t => !edits[t.id]?._deleted);
+    // Apply field edits
+    return filtered.map(t => {
+      const e = edits[t.id];
+      if (!e || e._deleted) return t;
+      const {_deleted, _ts, ...fields} = e;
+      return {...t, ...fields};
+    });
+  }
+};
 const threshold = {
   get() { return parseFloat(localStorage.getItem('jcrp_review_threshold')||'1000'); },
   set(v) { localStorage.setItem('jcrp_review_threshold', String(v)); }
@@ -148,8 +183,65 @@ const isConfigured = () => SHEETS_URL && SHEETS_URL.includes('script.google.com'
 async function sheetsGet(action) {
   const r = await fetch(`${SHEETS_URL}?action=${action}`); return r.json();
 }
+
+// ── SYNC QUEUE: edições que falharam são reenviadas automaticamente ──
+const syncQueue = {
+  _key: 'jcrp_sync_queue',
+  load() { try { return JSON.parse(localStorage.getItem(this._key)||'[]'); } catch { return []; } },
+  save(q) { try { localStorage.setItem(this._key, JSON.stringify(q)); } catch {} },
+  add(body) {
+    const q = this.load();
+    // Deduplicate: if same tx id already queued, replace
+    const filtered = body.tx?.id
+      ? q.filter(item => item.tx?.id !== body.tx.id)
+      : body.id
+        ? q.filter(item => item.id !== body.id)
+        : q;
+    filtered.push({...body, _qts: Date.now()});
+    this.save(filtered);
+    setSyncBadge();
+  },
+  remove(idx) {
+    const q = this.load();
+    q.splice(idx, 1);
+    this.save(q);
+  },
+  count() { return this.load().length; }
+};
+
 async function sheetsPost(body) {
-  const r = await fetch(SHEETS_URL,{method:'POST',body:JSON.stringify(body)}); return r.json();
+  try {
+    const r = await fetch(SHEETS_URL, {method:'POST', body:JSON.stringify(body)});
+    const data = await r.json();
+    return data;
+  } catch(e) {
+    // Network failed — queue for retry
+    if (body.action === 'editTx' || body.action === 'deleteTx' || body.action === 'addTxs') {
+      syncQueue.add(body);
+    }
+    throw e;
+  }
+}
+
+// Flush pending queue — called on every successful load
+async function flushSyncQueue() {
+  const q = syncQueue.load();
+  if (q.length === 0) return;
+  const failed = [];
+  for (const item of q) {
+    try {
+      const {_qts, ...body} = item;
+      await fetch(SHEETS_URL, {method:'POST', body:JSON.stringify(body)});
+    } catch(e) {
+      failed.push(item);
+    }
+  }
+  syncQueue.save(failed);
+  setSyncBadge();
+  if (failed.length < q.length) {
+    // Some succeeded — re-pull from Sheets to confirm state
+    showToast((q.length - failed.length) + ' edições sincronizadas ✓', 'ok');
+  }
 }
 
 // ── LOAD ──────────────────────────────────────────
@@ -176,13 +268,12 @@ async function loadData(silent=false) {
       remote = await Promise.race([sheetsGet('getTxs'), timeout]);
       showToast('Dados enviados ao Sheets!','ok');
     }
-    // Merge: preserve local category edits (reviewed items may have been re-categorized)
+    // Merge: apply ALL local edits on top of remote data
     const localRev = reviewed.load();
-    const localCache = cache.load();
-    const localEdits = {};
-    localCache.forEach(t => { if(localRev[t.id]) localEdits[t.id] = {sub:t.sub, cat:t.cat, obs:t.obs}; });
-    const merged = remote.map(t => localEdits[t.id] ? {...t, ...localEdits[t.id]} : t);
+    const merged = localEdits.applyTo(remote);
     STATE.txs = merged; STATE.synced = true; cache.save(merged);
+    // Flush any queued edits that failed previously
+    flushSyncQueue().catch(()=>{});
     // Restore reviewed state from Sheets if localStorage was cleared
     if(Object.keys(localRev).length === 0) {
       reviewed.restore().then(()=>{ updateReviewBadge(); });
@@ -210,8 +301,14 @@ function showToast(msg,type='info') {
 function setSyncBadge() {
   const b=document.getElementById('sync-badge');
   if(!b) return;
-  b.textContent=STATE.synced?'● Sheets':'○ Local';
-  b.className='sync-badge '+(STATE.synced?'synced':'local');
+  const pending = syncQueue.count();
+  if (pending > 0) {
+    b.textContent = '↑ '+pending+' pendente'+(pending>1?'s':'');
+    b.className = 'sync-badge offline';
+  } else {
+    b.textContent = STATE.synced ? '● Sheets' : '○ Local';
+    b.className = 'sync-badge '+(STATE.synced?'synced':'local');
+  }
 }
 function updateReviewBadge() {
   const rev=reviewed.load(), minVal=threshold.get();
@@ -964,6 +1061,7 @@ function rejectCard() {
   const newSub=sel?sel.value:t.sub, newCat=cat?cat.value:getCat(newSub);
   STATE.txs=STATE.txs.map(x=>x.id===t.id?{...x,sub:newSub,cat:newCat}:x);
   cache.save(STATE.txs);
+  localEdits.set(t.id, {sub:newSub, cat:newCat}); // persist review edit
   if(isConfigured()) sheetsPost({action:'editTx',tx:{...t,sub:newSub,cat:newCat}}).catch(()=>{});
   reviewed.approve(t.id); reviewIdx++; showReviewCard();
 }
@@ -1229,6 +1327,7 @@ async function saveEditTx() {
   const cat=document.getElementById('edittx-cat').value||getCat(sub);
   STATE.txs=STATE.txs.map(t=>t.id===id?{...t,sub,cat}:t);
   cache.save(STATE.txs);
+  localEdits.set(id, {sub, cat}); // persist edit locally
   if(isConfigured()) sheetsPost({action:'editTx',tx:STATE.txs.find(t=>t.id===id)}).catch(()=>{});
   closeEditTx(); refreshAll(); showToast('Salvo ✓','ok');
 }
@@ -1238,6 +1337,7 @@ async function deleteTx() {
   if(!confirm('Excluir este lançamento?')) return;
   STATE.txs=STATE.txs.filter(t=>t.id!==id);
   cache.save(STATE.txs);
+  localEdits.del(id); // mark as deleted locally
   if(isConfigured()) sheetsPost({action:'deleteTx',id}).catch(()=>{});
   closeEditTx(); refreshAll(); showToast('Excluído','ok');
 }
