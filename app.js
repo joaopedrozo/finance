@@ -82,7 +82,16 @@ const COLORS = ['#2C6FAC','#1A8C5B','#C07010','#8C2A8C','#C0392B','#2980B9','#16
 
 // ── HELPERS ───────────────────────────────────────
 function getCat(sub) { return CAT_MAP[sub] || 'Variáveis'; }
-function fmt(v) { return 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmt(v) {
+  if (STATE.hidden) return 'R$ ••••••';
+  return 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function toggleHide() {
+  STATE.hidden = !STATE.hidden;
+  const btn = document.getElementById('hide-btn');
+  if (btn) btn.textContent = STATE.hidden ? '👁' : '🙈';
+  refreshAll();
+}
 function fmtK(v) { const n=Number(v||0); if(Math.abs(n)>=1000000) return 'R$'+(n/1000000).toFixed(1)+'M'; if(Math.abs(n)>=1000) return 'R$'+(n/1000).toFixed(0)+'k'; return 'R$'+n.toFixed(0); }
 function pctOf(v,t) { return t?((v/t)*100).toFixed(0)+'%':'0%'; }
 
@@ -1056,4 +1065,177 @@ async function importFundo(input) {
   input.value = '';
 }
 
+async function saveEditTx() {
+  const id=document.getElementById('edittx-id').value;
+  const sub=document.getElementById('edittx-sub').value;
+  const cat=document.getElementById('edittx-cat').value||getCat(sub);
+  STATE.txs=STATE.txs.map(t=>t.id===id?{...t,sub,cat}:t);
+  cache.save(STATE.txs);
+  localEdits.set(id, {sub, cat});
 
+  const btn = document.getElementById('edittx-save-btn');
+  if (btn) { btn.textContent='Salvando...'; btn.disabled=true; }
+
+  if (isConfigured()) {
+    try {
+      const timeout = new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),6000));
+      await Promise.race([sheetsPost({action:'editTx',tx:STATE.txs.find(t=>t.id===id)}), timeout]);
+      localEdits.clear(id);
+      closeEditTx(); refreshAll();
+      showToast('Salvo no Sheets ✓','ok');
+    } catch(e) {
+      if (btn) { btn.textContent='Salvar'; btn.disabled=false; }
+      showToast('Sem conexão — salvo localmente','warn');
+      setTimeout(()=>{ closeEditTx(); refreshAll(); }, 2000);
+    }
+  } else {
+    closeEditTx(); refreshAll();
+    showToast('Salvo ✓','ok');
+  }
+}
+
+
+// ── ORÇAMENTO RENDER ──────────────────────────────
+function renderBudget() {
+  const el = document.getElementById('budget-content');
+  if (!el) return;
+  const b = getBudget();
+  const subs = [...new Set(STATE.txs.map(t=>t.sub).filter(Boolean))].sort();
+  const withBudget = subs.filter(s=>b[s]).sort((a,z)=>(b[z]||0)-(b[a]||0));
+  const withoutBudget = subs.filter(s=>!b[s]);
+  const total = Object.values(b).reduce((s,v)=>s+v,0);
+  const rowHtml = (sub) => {
+    const val = b[sub]||0;
+    return '<div class="bud-edit-row">'+
+      '<div class="bud-edit-name">'+sub+'</div>'+
+      '<div class="bud-edit-input-wrap">'+
+        '<span class="bud-edit-prefix">R$</span>'+
+        '<input type="number" class="bud-edit-input" value="'+(val||'')+'" placeholder="0" min="0"'+
+          ' onchange="saveBudgetField("'+(sub.replace(/"/g,""))+'",this.value)"'+
+          ' onblur="renderBudget()">'+
+      '</div>'+
+    '</div>';
+  };
+  el.innerHTML =
+    '<div class="bud-edit-wrap">'+
+      '<div class="bud-edit-header">'+
+        '<div class="bud-edit-card-title">Com orçamento definido</div>'+
+        '<div class="bud-edit-total">Total: '+(STATE.hidden?'R$ ••••••':fmt(total))+'/mês</div>'+
+      '</div>'+
+      '<div class="bud-edit-list">'+withBudget.map(rowHtml).join('')+'</div>'+
+    '</div>'+
+    (withoutBudget.length
+      ? '<div class="bud-edit-wrap" style="margin-top:10px">'+
+          '<div class="bud-edit-header"><div class="bud-edit-card-title">Sem orçamento definido</div></div>'+
+          '<div class="bud-edit-list">'+withoutBudget.map(rowHtml).join('')+'</div>'+
+        '</div>'
+      : '');
+}
+
+// ── CONCILIAÇÃO ──────────────────────────────────
+async function forceFullSync() {
+  if (!isConfigured()) { showToast('Configure o Google Sheets primeiro','warn'); return; }
+  const btn = document.getElementById('force-sync-btn');
+  if (btn) { btn.disabled=true; btn.textContent='Sincronizando...'; }
+  try {
+    showLoading(true);
+    await flushSyncQueue().catch(()=>{});
+    const edits = localEdits.load();
+    const editedIds = Object.keys(edits).filter(id=>!edits[id]._deleted);
+    const deletedIds = Object.keys(edits).filter(id=>edits[id]._deleted);
+    let synced=0;
+    for (const id of editedIds) {
+      const tx=STATE.txs.find(t=>t.id===id);
+      if (tx) { try { await sheetsPost({action:'editTx',tx}); synced++; } catch(e){} }
+    }
+    for (const id of deletedIds) {
+      try { await sheetsPost({action:'deleteTx',id}); synced++; } catch(e){}
+    }
+    const rev=reviewed.load();
+    if (Object.keys(rev).length>0) await sheetsPost({action:'saveReviewed',reviewed:rev}).catch(()=>{});
+    const timeout=new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),15000));
+    const remote=await Promise.race([sheetsGet('getTxs'),timeout]);
+    if (remote&&remote.length>0) {
+      const merged=localEdits.applyTo(remote);
+      STATE.txs=merged; STATE.synced=true; cache.save(merged);
+      syncQueue.save([]);
+      refreshAll();
+    }
+    showToast('Sincronização completa'+(synced>0?' — '+synced+' edições':'')+' ✓','ok');
+  } catch(e) {
+    showToast('Erro na sincronização','warn');
+  } finally {
+    showLoading(false); setSyncBadge();
+    if (btn) { btn.disabled=false; btn.textContent='Forçar sincronização agora'; }
+    renderConciliacao();
+  }
+}
+
+function renderConciliacao() {
+  const txs=STATE.txs;
+  const el=document.getElementById('concil-content');
+  if (!el) return;
+  const sources={};
+  txs.forEach(t=>{ const s=t.source||'outro'; if(!sources[s]) sources[s]={count:0,total:0}; sources[s].count++; sources[s].total+=parseFloat(t.val)||0; });
+  const byMonth={};
+  txs.forEach(t=>{ const m=t.date?t.date.slice(0,7):'sem data'; if(!byMonth[m]) byMonth[m]={count:0,total:0}; byMonth[m].count++; byMonth[m].total+=parseFloat(t.val)||0; });
+  const uncat=txs.filter(t=>t.sub==='NÃO CATEGORIZADO');
+  const uncatTotal=uncat.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  const totalGeral=txs.reduce((s,t)=>s+(parseFloat(t.val)||0),0);
+  const qLen=syncQueue.count();
+  const editLen=Object.keys(localEdits.load()).length;
+  const isCfg=isConfigured();
+  const MN={'2026-01':'Janeiro','2026-02':'Fevereiro','2026-03':'Março','2026-04':'Abril','2026-05':'Maio','2026-06':'Junho','2026-07':'Julho','2026-08':'Agosto','2026-09':'Setembro','2026-10':'Outubro','2026-11':'Novembro','2026-12':'Dezembro'};
+  const SL={'itau':'Itaú (conta)','unicred':'Unicred (conta)','card':'Cartão Itaú','card_unicred':'Cartão Unicred','excel':'Excel','manual':'Manual','outro':'Outros'};
+  let html='<div class="concil-wrap">';
+  html+='<div class="concil-card">'+
+    '<div class="concil-card-title">Sincronização</div>'+
+    '<div class="concil-row"><span>Status</span><span style="font-weight:600;color:'+(STATE.synced?'var(--green)':isCfg?'var(--muted2)':'var(--muted)')+'">'+
+      (STATE.synced?'● Sincronizado':isCfg?'○ Não sincronizado':'○ Sem Sheets')+'</span></div>'+
+    '<div class="concil-row"><span>Edições locais</span><span style="font-weight:600">'+editLen+'</span></div>'+
+    (qLen>0?'<div class="concil-row concil-warn"><span>⚠ Pendentes</span><span>'+qLen+'</span></div>':
+      STATE.synced?'<div class="concil-row concil-ok"><span>✓ Tudo sincronizado</span><span></span></div>':
+      '<div class="concil-row"><span style="color:var(--muted)">Abra online para sincronizar</span><span></span></div>')+
+    (isCfg?'<div style="padding:12px 16px"><button id="force-sync-btn" onclick="forceFullSync()" style="width:100%;padding:12px;background:var(--blue);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">Forçar sincronização agora</button></div>':'')+
+  '</div>';
+  html+='<div class="concil-card">'+
+    '<div class="concil-card-title">Resumo</div>'+
+    '<div class="concil-row concil-total"><span>Total importado</span><span>'+(STATE.hidden?'R$ ••••••':fmt(totalGeral))+'</span></div>'+
+    '<div class="concil-row"><span>Lançamentos</span><span>'+txs.length+'</span></div>'+
+    (uncatTotal>0?'<div class="concil-row concil-warn"><span>⚠ Sem categoria ('+uncat.length+')</span><span>'+(STATE.hidden?'R$ ••••••':fmt(uncatTotal))+'</span></div>':
+      '<div class="concil-row concil-ok"><span>✓ Tudo categorizado</span><span></span></div>')+
+  '</div>';
+  html+='<div class="concil-card"><div class="concil-card-title">Por Fonte</div>'+
+    Object.entries(sources).sort((a,b)=>b[1].total-a[1].total).map(([src,d])=>
+      '<div class="concil-row"><div><div class="concil-row-name">'+(SL[src]||src)+'</div>'+
+      '<div class="concil-row-sub">'+d.count+' lançamentos</div></div>'+
+      '<div class="concil-row-val">'+(STATE.hidden?'R$ ••••••':fmt(d.total))+'</div></div>'
+    ).join('')+'</div>';
+  html+='<div class="concil-card"><div class="concil-card-title">Por Mês</div>'+
+    Object.entries(byMonth).sort((a,b)=>a[0].localeCompare(b[0])).map(([m,d])=>
+      '<div class="concil-row"><div><div class="concil-row-name">'+(MN[m]||m)+'</div>'+
+      '<div class="concil-row-sub">'+d.count+' lançamentos</div></div>'+
+      '<div class="concil-row-val">'+(STATE.hidden?'R$ ••••••':fmt(d.total))+'</div></div>'
+    ).join('')+'</div>';
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+// ── AJUSTES ──────────────────────────────────────
+let activeAjusteTab='revisar';
+function renderAjustes() { setAjusteTab(activeAjusteTab); }
+function setAjusteTab(tab) {
+  activeAjusteTab=tab;
+  ['revisar','regras','import','budget','concil'].forEach(t=>{
+    const btn=document.getElementById('atab-'+t);
+    const pane=document.getElementById('ajuste-'+t);
+    if(btn) btn.className='ajuste-tab'+(t===tab?' active':'');
+    if(pane) pane.style.display=t===tab?'block':'none';
+  });
+  if(tab==='revisar') renderRevisar();
+  if(tab==='regras')  renderRules();
+  if(tab==='import')  renderImport();
+  if(tab==='budget')  renderBudget();
+  if(tab==='concil')  renderConciliacao();
+  updateReviewBadge();
+}
