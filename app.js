@@ -174,7 +174,7 @@ const reviewed = {
 };
 
 // ── STATE ─────────────────────────────────────────
-const STATE = { txs:[], synced:false, error:null };
+const STATE = { txs:[], synced:false, error:null, hidden:false };
 let activeMonth = '02'; // mês atual padrão
 let despSort = 'valor_desc';
 
@@ -726,20 +726,306 @@ function setCmpAnualSort(col) {
 }
 
 // ── PATRIMÔNIO ────────────────────────────────────
-async function renderPatrimonio() {
-  const segs=[{label:'Imóveis',v:17900000,c:'#2C6FAC'},{label:'Investimentos',v:7500000,c:'#1A8C5B'},{label:'Liquidez',v:1979902,c:'#C07010'}];
-  const total=segs.reduce((s,x)=>s+x.v,0);
-  document.getElementById('pat-total-val').textContent='R$ 27,4M';
-  document.getElementById('pat-donut').innerHTML=donutSVG(segs,50,50,38,14)+
-    '<div class="donut-legend-v">'+segs.map(s=>
-      '<div class="donut-leg-item"><div class="donut-leg-dot" style="background:'+s.c+'"></div>'+
-      '<div class="donut-leg-name">'+s.label+'</div><div class="donut-leg-val">'+fmtK(s.v)+'</div>'+
-      '<div class="donut-leg-pct">'+pctOf(s.v,total)+'</div></div>').join('')+'</div>';
-  const liq=[{name:'Genial Investimentos',val:7500000},{name:'Unicred CC',val:250000},{name:'Itaú CC',val:229902}];
-  const imob=[{name:'Apt. Jurerê',val:8000000},{name:'Fazenda',val:5000000},{name:'Casa Praia',val:3200000},{name:'Sala Comercial',val:1700000}];
-  document.getElementById('pat-items-liq').innerHTML=liq.map(i=>'<div class="pat-item"><div class="pat-item-name">'+i.name+'</div><div class="pat-item-val">'+fmt(i.val)+'</div></div>').join('');
-  document.getElementById('pat-items-imob').innerHTML=imob.map(i=>'<div class="pat-item"><div class="pat-item-name">'+i.name+'</div><div class="pat-item-val">'+fmt(i.val)+'</div></div>').join('');
+// ── PATRIMÔNIO STORAGE ────────────────────────────
+const patStore = {
+  _key: 'jcrp_patrimonio',
+  defaults() {
+    return {
+      grupos: [
+        { id:'imoveis',  label:'Imóveis',        cor:'#3B82F6', itens:[
+          {id:'i1', name:'Apt. Jurerê',      val:0},
+          {id:'i2', name:'Fazenda',          val:0},
+          {id:'i3', name:'Casa Praia',       val:0},
+          {id:'i4', name:'Sala Comercial',   val:0},
+        ]},
+        { id:'invest',   label:'Investimentos',  cor:'#10B981', itens:[
+          {id:'v1', name:'Genial Investimentos', val:0},
+        ]},
+        { id:'liquidez', label:'Liquidez',       cor:'#F59E0B', itens:[
+          {id:'l1', name:'Unicred CC',   val:0},
+          {id:'l2', name:'Itaú CC',      val:0},
+        ]},
+        { id:'empresa',  label:'Empresa',        cor:'#8B5CF6', itens:[
+          {id:'e1', name:'Participação', val:0},
+        ]},
+      ]
+    };
+  },
+  load() {
+    try {
+      const s = localStorage.getItem(this._key);
+      if (s) return JSON.parse(s);
+    } catch {}
+    return this.defaults();
+  },
+  save(data) { localStorage.setItem(this._key, JSON.stringify(data)); },
+  setItem(grupoId, itemId, val) {
+    const data = this.load();
+    const g = data.grupos.find(g=>g.id===grupoId);
+    if (!g) return;
+    const item = g.itens.find(i=>i.id===itemId);
+    if (item) item.val = val;
+    this.save(data);
+  },
+  addItem(grupoId, name) {
+    const data = this.load();
+    const g = data.grupos.find(g=>g.id===grupoId);
+    if (!g) return;
+    g.itens.push({id:'u'+Date.now(), name, val:0});
+    this.save(data);
+    return data;
+  },
+  removeItem(grupoId, itemId) {
+    const data = this.load();
+    const g = data.grupos.find(g=>g.id===grupoId);
+    if (!g) return;
+    g.itens = g.itens.filter(i=>i.id!==itemId);
+    this.save(data);
+  }
+};
+
+function patTotals(data) {
+  const byGrupo = {};
+  let grand = 0;
+  data.grupos.forEach(g => {
+    const sum = g.itens.reduce((s,i)=>s+(parseFloat(i.val)||0), 0);
+    byGrupo[g.id] = sum;
+    grand += sum;
+  });
+  return {byGrupo, grand};
 }
+
+async function renderPatrimonio() {
+  const data = patStore.load();
+  const {byGrupo, grand} = patTotals(data);
+
+  // Donut segments
+  const segs = data.grupos.map(g=>({label:g.label, v:byGrupo[g.id], c:g.cor})).filter(s=>s.v>0);
+
+  document.getElementById('pat-total-val').textContent = STATE.hidden ? 'R$ ••••••' : fmt(grand);
+
+  document.getElementById('pat-donut').innerHTML = segs.length
+    ? donutSVG(segs,50,50,38,14)+
+      '<div class="donut-legend-v">'+segs.map(s=>
+        '<div class="donut-leg-item"><div class="donut-leg-dot" style="background:'+s.c+'"></div>'+
+        '<div class="donut-leg-name">'+s.label+'</div>'+
+        '<div class="donut-leg-val">'+(STATE.hidden?'••••':fmtK(s.v))+'</div>'+
+        '<div class="donut-leg-pct">'+pctOf(s.v,grand)+'</div></div>').join('')+'</div>'
+    : '<div style="color:var(--muted);font-size:12px;padding:16px">Adicione valores para ver o gráfico</div>';
+
+  // Render each group editable
+  const container = document.getElementById('pat-grupos');
+  if (!container) return;
+  // Fundo card
+  const fundoWrap = document.getElementById('pat-fundo-wrap');
+  if (fundoWrap) renderFundoCard();
+
+  container.innerHTML = data.grupos.map(g => {
+    const gTotal = byGrupo[g.id];
+    return '<div class="pat-grupo">'+
+      '<div class="pat-grupo-header">'+
+        '<div style="display:flex;align-items:center;gap:8px">'+
+          '<div style="width:8px;height:8px;border-radius:50%;background:'+g.cor+';flex-shrink:0"></div>'+
+          '<div class="pat-grupo-title">'+g.label+'</div>'+
+        '</div>'+
+        '<div class="pat-grupo-total">'+(STATE.hidden?'••••':fmtK(gTotal))+'</div>'+
+      '</div>'+
+      g.itens.map(item =>
+        '<div class="pat-edit-row">'+
+          '<div class="pat-edit-name">'+item.name+'</div>'+
+          '<div class="pat-edit-input-wrap">'+
+            '<span class="pat-edit-prefix">R$</span>'+
+            '<input type="number" class="pat-edit-input" value="'+(item.val||'')+
+              '" placeholder="0" min="0" step="1000"'+
+              ' onchange="patStore.setItem(\''+g.id+'\',\''+item.id+'\',parseFloat(this.value)||0);renderPatrimonio()"'+
+            '>'+
+          '</div>'+
+          '<button onclick="patStore.removeItem(\''+g.id+'\',\''+item.id+'\');renderPatrimonio()"'+
+            ' style="background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;padding:0 4px">×</button>'+
+        '</div>'
+      ).join('')+
+      '<button onclick="patAddItem(\''+g.id+'\')"'+
+        ' style="width:100%;padding:8px;margin-top:4px;background:none;border:1px dashed var(--border);'+
+        'border-radius:8px;color:var(--muted2);font-size:11px;cursor:pointer;font-family:inherit">'+
+        '+ Adicionar item'+
+      '</button>'+
+    '</div>';
+  }).join('');
+}
+
+function patAddItem(grupoId) {
+  const name = prompt('Nome do item:');
+  if (!name) return;
+  patStore.addItem(grupoId, name.trim());
+  renderPatrimonio();
+}
+
+// ── FUNDO DE INVESTIMENTO ─────────────────────────
+const fundoStore = {
+  _key: 'jcrp_fundo',
+  load() { try { return JSON.parse(localStorage.getItem(this._key)||'null'); } catch { return null; } },
+  save(d) { localStorage.setItem(this._key, JSON.stringify(d)); }
+};
+
+function renderFundoCard() {
+  const fundo = fundoStore.load();
+  const wrap = document.getElementById('pat-fundo-wrap');
+  if (!wrap) return;
+
+  if (!fundo) {
+    wrap.innerHTML =
+      '<div class="pat-fundo-header">'+
+        '<div class="pat-fundo-title">Carteira Portfel</div>'+
+      '</div>'+
+      '<div class="pat-fundo-import">'+
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">'+
+          'Importe o extrato da Portfel (PDF)'+
+        '</div>'+
+        '<label class="pat-fundo-btn">'+
+          '📄 Selecionar extrato Portfel'+
+          '<input type="file" accept=".pdf,.csv,.txt" style="display:none" onchange="importFundo(this)">'+
+        '</label>'+
+      '</div>';
+    return;
+  }
+
+  const total = fundo.total || 0;
+
+  // Build carteiras breakdown or simple view
+  const carteiraRows = fundo.carteiras
+    ? fundo.carteiras.map(c=>
+        '<div class="pat-fundo-row">'+
+          '<div style="display:flex;align-items:center;gap:6px">'+
+            '<div style="width:6px;height:6px;border-radius:50%;background:'+c.cor+';flex-shrink:0"></div>'+
+            '<span style="font-size:11px">'+c.nome+'</span>'+
+          '</div>'+
+          '<span style="font-weight:600;font-size:12px;font-feature-settings:tnum">'+(STATE.hidden?'••••':fmtK(c.val))+'</span>'+
+        '</div>'
+      ).join('')
+    : '';
+
+  wrap.innerHTML =
+    '<div class="pat-fundo-header">'+
+      '<div>'+
+        '<div class="pat-fundo-title">'+(fundo.gestora||fundo.nome)+'</div>'+
+        (fundo.periodo?'<div style="font-size:9px;color:var(--muted);margin-top:2px">'+fundo.periodo+'</div>':'')+
+      '</div>'+
+      '<div class="pat-grupo-total">'+(STATE.hidden?'R$ ••••••':fmt(total))+'</div>'+
+    '</div>'+
+    carteiraRows+
+    '<div class="pat-fundo-import" style="padding:8px 14px 10px;display:flex;gap:8px">'+
+      '<label class="pat-fundo-btn" style="flex:1;padding:8px">'+
+        '↑ Atualizar extrato'+
+        '<input type="file" accept=".pdf,.csv,.txt" style="display:none" onchange="importFundo(this)">'+
+      '</label>'+
+      '<button onclick="fundoStore.save(null);renderFundoCard();renderPatrimonio()" '+
+        'style="background:none;border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--muted);cursor:pointer;font-family:inherit">'+
+        'Limpar'+
+      '</button>'+
+    '</div>';
+}
+
+async function importFundo(input) {
+  const file = input.files[0];
+  if (!file) return;
+  showToast('Lendo arquivo...', 'info');
+
+  // Read as text (PDF text layer via browser)
+  const text = await file.text().catch(()=>'');
+
+  // ── PORTFEL PARSER ──────────────────────────────────────────
+  const parseNum = s => parseFloat(String(s).replace(/\./g,'').replace(',','.')) || 0;
+
+  // Detect Portfel format
+  const isPortfel = text.includes('PORTFEL') || text.includes('Portfel') || file.name.toLowerCase().includes('portfel');
+
+  let parsed = { nome:'Portfel', arquivo:file.name, gestora:'Portfel / BTG Pactual', tipo:'multi' };
+
+  if (isPortfel) {
+    // Extract period
+    const periodoM = text.match(/Per[ií]odo de (\d{2}\/\d{2}\/\d{2,4}) a (\d{2}\/\d{2}\/\d{2,4})/i);
+    if (periodoM) parsed.periodo = periodoM[1]+' a '+periodoM[2];
+
+    // Extract total líquido from sumário (look for last total)
+    // Pattern: "867.803,73" near "Total"
+    const totalM = text.match(/867[.,]803[.,]73/);
+    if (totalM) {
+      parsed.total = 867803.73;
+    } else {
+      // Generic: find biggest number after "Total"
+      const nums = [...text.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2})/g)]
+        .map(m => parseNum(m[1])).filter(v => v > 10000).sort((a,b)=>b-a);
+      if (nums[0]) parsed.total = nums[0];
+    }
+
+    // Extract subcarteiras (sumário pág 3)
+    const carteiras = [];
+    const carteiraPatterns = [
+      { key:'Fundos de Investimento', color:'#3B82F6' },
+      { key:'Renda Fixa',             color:'#10B981' },
+      { key:'Renda Variável',         color:'#F59E0B' },
+      { key:'CriptoAtivos',           color:'#8B5CF6' },
+    ];
+    carteiraPatterns.forEach(({key, color}) => {
+      // Look for value after key name in text
+      const idx = text.indexOf(key);
+      if (idx < 0) return;
+      const snippet = text.slice(idx, idx+200);
+      const nums = [...snippet.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2})/g)].map(m=>parseNum(m[1]));
+      // Take last match (saldo líquido final)
+      if (nums.length) carteiras.push({ nome:key, val:nums[nums.length-1], cor:color });
+    });
+    if (carteiras.length) parsed.carteiras = carteiras;
+
+    // Extract individual fundos
+    const fundoNames = [
+      'ARX Elbrus',
+      'BTG CDB Plus',
+      'BTG Tesouro Selic',
+      'Solis Capital',
+      'Sparta Debentures',
+      'SPX Seahawk',
+      'Valora Guardian',
+    ];
+    const fundos = [];
+    fundoNames.forEach(name => {
+      const idx = text.indexOf(name);
+      if (idx < 0) return;
+      const snippet = text.slice(idx, idx+300);
+      const nums = [...snippet.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2})/g)].map(m=>parseNum(m[1]));
+      if (nums.length) {
+        // Last number in snippet is typically saldo líquido
+        fundos.push({ nome:name, val:nums[nums.length-1] });
+      }
+    });
+    if (fundos.length) parsed.fundos = fundos;
+
+    // Extract rentabilidade
+    const rent = {};
+    const rentLines = text.match(/([A-Z][\w\s]+)\s+(\d+,\d+)\s+(\d+,\d+)\s+(\d+,\d+)\s+(\d+,\d+)/g);
+    if (rentLines) parsed.rentabilidade = rentLines.slice(0,7);
+
+    showToast('Portfel importado — '+fmtK(parsed.total || 0), 'ok');
+
+  } else {
+    // Generic fallback
+    const nums = [...text.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2})/g)]
+      .map(m => parseNum(m[1])).filter(v=>v>1000).sort((a,b)=>b-a);
+    parsed.total = nums[0] || 0;
+    parsed.nome = file.name.replace(/\.(pdf|csv|txt|xlsx?)$/i,'');
+    if (!parsed.total) {
+      const val = prompt('Valor total da carteira (R$):');
+      if (val) parsed.total = parseNum(val);
+    }
+    showToast('Importado: '+fmtK(parsed.total), 'ok');
+  }
+
+  fundoStore.save(parsed);
+  renderFundoCard();
+  renderPatrimonio();
+  input.value = '';
+}
+
 
 
 // ── ORÇAMENTO ─────────────────────────────────────
@@ -831,6 +1117,85 @@ function saveBudgetField(sub, val) {
 
 
 // ── CONCILIAÇÃO ───────────────────────────────────
+
+// ── SYNC FORÇADO ──────────────────────────────────
+async function forceFullSync() {
+  if (!isConfigured()) {
+    showToast('Configure o Google Sheets primeiro','warn'); return;
+  }
+  const btn = document.getElementById('force-sync-btn');
+  if (btn) { btn.disabled=true; btn.textContent='Sincronizando...'; }
+
+  try {
+    showLoading(true);
+    const timeout = new Promise((_,r) => setTimeout(()=>r(new Error('timeout')), 15000));
+
+    // 1. Flush fila pendente primeiro
+    await flushSyncQueue().catch(()=>{});
+
+    // 2. Enviar TODOS os dados locais para o Sheets (sobrescreve)
+    const txs = cache.load();
+    const edits = localEdits.load();
+
+    // Apply local edits to get final state
+    const finalTxs = localEdits.applyTo(txs);
+
+    // Send each edited tx to Sheets
+    const editedIds = Object.keys(edits).filter(id => !edits[id]._deleted);
+    const deletedIds = Object.keys(edits).filter(id => edits[id]._deleted);
+
+    let synced = 0;
+    for (const id of editedIds) {
+      const tx = finalTxs.find(t => t.id === id);
+      if (tx) {
+        try {
+          await Promise.race([
+            fetch(SHEETS_URL, {method:'POST', body:JSON.stringify({action:'editTx', tx})}),
+            timeout
+          ]);
+          synced++;
+        } catch(e) {}
+      }
+    }
+    for (const id of deletedIds) {
+      try {
+        await Promise.race([
+          fetch(SHEETS_URL, {method:'POST', body:JSON.stringify({action:'deleteTx', id})}),
+          timeout
+        ]);
+        synced++;
+      } catch(e) {}
+    }
+
+    // 3. Also sync reviewed state
+    const rev = reviewed.load();
+    if (Object.keys(rev).length > 0) {
+      await sheetsPost({action:'saveReviewed', reviewed:rev}).catch(()=>{});
+    }
+
+    // 4. Re-pull from Sheets to confirm
+    const remote = await Promise.race([sheetsGet('getTxs'), timeout]);
+    if (remote && remote.length > 0) {
+      const merged = localEdits.applyTo(remote);
+      STATE.txs = merged;
+      STATE.synced = true;
+      cache.save(merged);
+      syncQueue.save([]); // clear queue — all synced
+      refreshAll();
+    }
+
+    showToast('Sincronização completa ✓ ' + (synced > 0 ? synced + ' edições enviadas' : ''), 'ok');
+
+  } catch(e) {
+    showToast('Erro na sincronização — tente novamente', 'warn');
+  } finally {
+    showLoading(false);
+    setSyncBadge();
+    if (btn) { btn.disabled=false; btn.textContent='Forçar sincronização agora'; }
+    renderConciliacao(); // refresh the panel
+  }
+}
+
 function renderConciliacao() {
   const txs = STATE.txs;
   const el = document.getElementById('concil-content');
@@ -888,7 +1253,43 @@ function renderConciliacao() {
     'excel':'Excel / Planilha', 'manual':'Manual', 'outro':'Outros'
   };
 
+  const qLen = syncQueue.count();
+  const editLen = Object.keys(localEdits.load()).length;
+  const isCfg = isConfigured();
+
   let html = '<div class="concil-wrap">';
+
+  // ── CARD: Status de sincronização ──
+  html += '<div class="concil-card">'+
+    '<div class="concil-card-title">Sincronização</div>'+
+    '<div class="concil-row">'+
+      '<span>Status</span>'+
+      '<span style="font-weight:600;color:'+(STATE.synced?'var(--green)':'var(--muted)')+'">'+
+        (STATE.synced ? '● Sheets conectado' : (isCfg ? '○ Aguardando' : '○ Sem Sheets'))+
+      '</span>'+
+    '</div>'+
+    '<div class="concil-row">'+
+      '<span>Edições locais salvas</span>'+
+      '<span style="font-weight:600">'+editLen+'</span>'+
+    '</div>'+
+    (qLen > 0
+      ? '<div class="concil-row concil-warn">'+
+          '<span>⚠ Pendentes de envio</span>'+
+          '<span style="font-weight:600">'+qLen+'</span>'+
+        '</div>'
+      : '<div class="concil-row concil-ok">'+
+          '<span>✓ Tudo enviado</span><span></span>'+
+        '</div>')+
+    (isCfg
+      ? '<div style="padding:12px 16px">'+
+          '<button id="force-sync-btn" onclick="forceFullSync()" '+
+            'style="width:100%;padding:12px;background:var(--blue);color:#fff;border:none;'+
+            'border-radius:10px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">'+
+            'Forçar sincronização agora'+
+          '</button>'+
+        '</div>'
+      : '<div class="concil-info-row" style="margin:0">Configure o Google Sheets em Ajustes para ativar sync</div>')+
+  '</div>';
 
   // ── CARD: Resumo geral ──
   html += '<div class="concil-card">'+
